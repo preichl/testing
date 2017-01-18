@@ -2,10 +2,11 @@
 
 # todo env
 
+from sys import exit
 from subprocess import call
 from tempfile import mkdtemp
-from os import chdir
-from os.path import basename, splitext, join
+from os import chdir, getcwd
+from os.path import basename, splitext, join, isfile, pardir
 
 try:
     from subprocess import DEVNULL  # py3k
@@ -13,6 +14,8 @@ except ImportError:
     import os
     DEVNULL = open(os.devnull, 'wb')
 
+
+use_tmp_dir = False
 
 # Some wrappers
 def pkg_is_installed(name):
@@ -37,13 +40,13 @@ def download(url):
     return False
 
 def make():
-    ret = call(['make'])
+    ret = call(['make'], stdout = DEVNULL)
     if ret == 0:
         return True
     return False
 
 def install():
-    ret = call(['make', 'install'])
+    ret = call(['make', 'install'], stdout = DEVNULL)
     if ret == 0:
         return True
     return False
@@ -55,11 +58,37 @@ def unpack(file):
     return False
 
 def configure(params):
-    ret = call(['./configure'] + params)
+    print('./configure ' + str(params))
+    ret = call(['./configure'] + params, stdout = DEVNULL)
     if ret == 0:
         return True
     return False
 
+def git_clone(url):
+    print('git clone ' + url)
+    ret = call(['git', 'clone', url], stdout = DEVNULL)
+    if ret == 0:
+        return True
+    return False
+
+def git_checkout(branch, newbranch):
+    print('git checkout ' + branch)
+    ret = call(['git', 'branch', branch, '-b', newbranch], stdout = DEVNULL)
+    if ret == 0:
+        return True
+    return False
+
+def cmd(command, params = []):
+    print('{0} {1}'.format(command, ' '.join(params)))
+    ret = call([command] + params, stdout = DEVNULL)
+    if ret != 0:
+        print('Returned [{0}]'.format(ret))
+    return ret
+
+def cmd_checked(command, params = []):
+    if cmd(command, params) != 0:
+        print('It failed! Bye!')
+        exit(0)
 
 class Project:
     """A class encapsulating getting and building project"""
@@ -111,14 +140,14 @@ class ProjectBuilder:
 
     def _build_proj(self, proj):
         # HACK
-        #proj.download()
-        #proj.unpack()
-        print(proj.get_arch_name())
-        print(proj.get_unpack_dir())
+        if not isfile(proj.get_arch_name()):
+            proj.download()
+        proj.unpack()
         chdir(proj.get_unpack_dir())
-        print('changed')
         proj.configure()
+        print('make')
         make()
+        print('install')
         install()
         chdir(tmp_dir)
 
@@ -136,8 +165,11 @@ class ProjectBuilder:
 #######################################################################
 # Dependency stage
 print("Check and install required packages")
-pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel']
+pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'maven', 'git', 'autoconf', 'libtool']
+#HACK
+pkg_to_check = []
 for pkg in pkg_to_check:
+
     if not pkg_is_installed(pkg):
         print('{0} is not installed.'.format(pkg))
         ret = pkg_install(pkg)
@@ -148,9 +180,11 @@ for pkg in pkg_to_check:
 #######################################################################
 # Download & unpack stage
 
-tmp_dir = mkdtemp()
-# HACK
-tmp_dir = '/tmp/tmp5cfkyq1h'
+if use_tmp_dir:
+    tmp_dir = mkdtemp()
+else:
+    tmp_dir = getcwd()
+
 print("Changing to {0}".format(tmp_dir))
 chdir(tmp_dir)
 
@@ -166,6 +200,31 @@ apache = Project(name='apache',
 
 # todo mod cluster
 
+# pBuild = ProjectBuilder([apache, apr, apr_util])
+# pBuild.build_all()
 
-pBuild = ProjectBuilder([apache, apr, apr_util])
-pBuild.build_all()
+cmd('git', ['clone', 'https://github.com/preichl/mod_cluster.git'])
+#cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
+chdir('mod_cluster')
+cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
+
+chdir('native')
+#   131  cd mod_cluster_slotmem/
+#   172  ./buildconf 
+#   155  ./configure --with-apxs=/tmp/usr/local/apache/bin/apxs
+# make()
+#   158  libtool --finish /tmp/usr/local/apache/modules
+# install()
+
+for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertise']:
+    print('Building mod: {0}'.format(mod))
+    chdir(mod)
+    cmd_checked('./buildconf')
+    cmd_checked('./configure',
+                ['--with-apxs={0}'.format(join(apache.get_install_dir(),'bin/apxs')),
+                 '--prefix={0}'.format(join(apache.get_install_dir(), 'modules'))])
+    cmd_checked('make')
+    cmd_checked('libtool',
+                ['--finish', join(apache.get_install_dir(), 'modules')])
+    cmd_checked('make', ['install'])
+    chdir(pardir)
