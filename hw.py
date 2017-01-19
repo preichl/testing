@@ -125,7 +125,7 @@ print("Check and install required packages")
 pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git',
                 'autoconf', 'libtool', 'patch']
 # HACK
-pkg_to_check = []
+#pkg_to_check = []
 for pkg in pkg_to_check:
 
     if not pkg_is_installed(pkg):
@@ -157,8 +157,8 @@ apache = Project(name='apache',
                  dependencies=[apr, apr_util])
 
 # HACK
-# pBuild = ProjectBuilder([apache, apr, apr_util])
-# pBuild.build_all()
+pBuild = ProjectBuilder([apache, apr, apr_util])
+pBuild.build_all()
 
 ######################################
 # Get, build and install mod_cluster
