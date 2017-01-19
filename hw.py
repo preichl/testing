@@ -157,11 +157,11 @@ apache = Project(name='apache',
                  dependencies=[apr, apr_util])
 
 # HACK
-pBuild = ProjectBuilder([apache, apr, apr_util])
-pBuild.build_all()
+# pBuild = ProjectBuilder([apache, apr, apr_util])
+# pBuild.build_all()
 
 ######################################
-# Get, build and install mod_cluster
+# Get, pathc, build and install mod_cluster
 ######################################
 
 cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
@@ -169,6 +169,23 @@ chdir('mod_cluster')
 cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
 chdir('native')
 
+# patching
+banner_path =\
+              """
+2850c2850
+<     ap_rvputs(r, "<h1>", MOD_CLUSTER_EXPOSED_VERSION, "</h1>", NULL);
+---
+>     ap_rvputs(r, "<h1>", ap_get_server_banner(), "</h1>", NULL);
+"""
+banner_path_file = NamedTemporaryFile('w')
+banner_path_file.write(banner_path)
+banner_path_file.flush()
+
+chdir('mod_manager')
+cmd('patch', ['mod_manager.c', banner_path_file.name])
+chdir(pardir)
+
+# build & install
 for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertise']:
     print('Building mod: {0}'.format(mod))
     chdir(mod)
@@ -215,9 +232,9 @@ diff_file.write(diff_text)
 diff_file.flush()
 cmd('patch', [conf_path, diff_file.name], sout=None)
 
-# Set firewall
-cmd_checked('firewall-cmd', ['--add-service=http', '--permanent'])
-cmd_checked('firewall-cmd', ['--add-port=6666/tcp', '--permanent'])
+# Set firewall - just for now
+cmd_checked('firewall-cmd', ['--add-service=http'])
+cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
 
 # (re)Start apache
 cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
