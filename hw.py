@@ -5,7 +5,7 @@
 from glob import glob
 from sys import exit
 from subprocess import call
-from tempfile import mkdtemp
+from tempfile import mkdtemp, NamedTemporaryFile
 from os import chdir, getcwd, makedirs
 from os.path import basename, splitext, join, isfile, pardir, exists
 
@@ -35,16 +35,16 @@ def pkg_install(pkg):
     return False
 
 
-def cmd(command, params=[], stdo=DEVNULL):
+def cmd(command, params=[], sout=DEVNULL):
     print('{0} {1}'.format(command, ' '.join(params)))
-    ret = call([command] + params, stdout=stdo)
+    ret = call([command] + params, stdout=sout)
     if ret != 0:
         print('Returned [{0}]'.format(ret))
     return ret
 
 
-def cmd_checked(command, params=[], stdout=DEVNULL):
-    if cmd(command, params, stdout) != 0:
+def cmd_checked(command, params=[], sout=DEVNULL):
+    if cmd(command, params, sout) != 0:
         print('It failed! Bye!')
         exit(0)
 
@@ -122,7 +122,8 @@ class ProjectBuilder:
 #######################################################################
 # Dependency stage
 print("Check and install required packages")
-pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'maven', 'git', 'autoconf', 'libtool']
+pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git',
+                'autoconf', 'libtool', 'patch']
 # HACK
 pkg_to_check = []
 for pkg in pkg_to_check:
@@ -163,9 +164,7 @@ apache = Project(name='apache',
 # Get, build and install mod_cluster
 ######################################
 
-# There is a bug in https://github.com/modcluster/mod_cluster.git
-# temp. use mine
-cmd('git', ['clone', 'https://github.com/preichl/mod_cluster.git'])
+cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
 chdir('mod_cluster')
 cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
 chdir('native')
@@ -184,16 +183,41 @@ for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertis
     cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')], )
     chdir(pardir)
 
-# mod_cluster config
+# Get mod_cluster config file
 url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'
-conf_path = join(apache.get_install_dir(), 'conf/extra/', basename(url))
-cache_dir = join(apache.get_install_dir(), 'cache')
-cmd_checked('wget', ['--quiet', url, '-O', conf_path])
+extra_conf_path = join(apache.get_install_dir(), 'conf/extra/', basename(url))
+cmd_checked('wget', ['--quiet', url, '-O', extra_conf_path])
 
+# Update mod_cluster config file
+cache_dir = join(apache.get_install_dir(), 'cache')
 if not exists(cache_dir):
     makedirs(cache_dir)
 cmd_checked('sed',
             ['-i',
-             's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'\
+             's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'
              .format(join(cache_dir, 'mod_cluster')),
-             conf_path])
+             extra_conf_path])
+
+# Update apache config file
+conf_path = join(apache.get_install_dir(), 'conf/httpd.conf')
+diff_text =\
+            """
+115c115
+< #LoadModule proxy_module modules/mod_proxy.so
+---
+> LoadModule proxy_module modules/mod_proxy.so
+453a454,455
+>  
+> Include conf/extra/mod_cluster.conf
+"""
+diff_file = NamedTemporaryFile('w')
+diff_file.write(diff_text)
+diff_file.flush()
+cmd('patch', [conf_path, diff_file.name], sout=None)
+
+# Set firewall
+cmd_checked('firewall-cmd', ['--add-service=http', '--permanent'])
+cmd_checked('firewall-cmd', ['--add-port=6666/tcp', '--permanent'])
+
+# (re)Start apache
+cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
