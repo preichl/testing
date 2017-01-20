@@ -125,7 +125,7 @@ print("Check and install required packages")
 pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
                 'autoconf', 'libtool', 'patch']
 # HACK
-#pkg_to_check = []
+pkg_to_check = []
 for pkg in pkg_to_check:
 
     if not pkg_is_installed(pkg):
@@ -169,7 +169,7 @@ chdir('mod_cluster')
 cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
 chdir('native')
 
-# patching
+# Patching mod_cluster version to show apache banner
 banner_path =\
               """
 2850c2850
@@ -202,8 +202,11 @@ for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertis
 
 # Get mod_cluster config file
 url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'
+# Don't get the file again if it's already around
+if not exists(basename(url)):
+            cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
 extra_conf_path = join(apache.get_install_dir(), 'conf/extra/', basename(url))
-cmd_checked('wget', ['--quiet', url, '-O', extra_conf_path])
+cmd_checked('cp', [basename(url), extra_conf_path])
 
 # Update mod_cluster config file
 cache_dir = join(apache.get_install_dir(), 'cache')
@@ -223,6 +226,10 @@ diff_text =\
 < #LoadModule proxy_module modules/mod_proxy.so
 ---
 > LoadModule proxy_module modules/mod_proxy.so
+123c123
+< #LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
+---
+> LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
 453a454,455
 >  
 > Include conf/extra/mod_cluster.conf
@@ -252,6 +259,12 @@ cmd('tar', ['xzf', basename(turl)])
 # Set firewall - just for now
 cmd_checked('firewall-cmd', ['--add-service=http'])
 cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
+cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
+cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
+cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
+cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
-# (re)Start apache
+# (re)Start apache & tomcat
 cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
+
+# romcat
