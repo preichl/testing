@@ -122,7 +122,7 @@ class ProjectBuilder:
 #######################################################################
 # Dependency stage
 print("Check and install required packages")
-pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git',
+pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
                 'autoconf', 'libtool', 'patch']
 # HACK
 #pkg_to_check = []
@@ -231,6 +231,23 @@ diff_file = NamedTemporaryFile('w')
 diff_file.write(diff_text)
 diff_file.flush()
 cmd('patch', [conf_path, diff_file.name], sout=None)
+
+# Move from mod_cluster/native  to mod_cluster and build it's java libraries
+chdir(pardir)
+cmd_checked('mvn', ['package', '-DskipTests'])
+
+# Get and build jboss logging
+chdir(pardir)
+cmd('git', ['clone', 'https://github.com/jboss-logging/jboss-logging.git'])
+chdir('jboss-logging')
+cmd_checked('mvn', ['package', '-DskipTests'])
+
+chdir(pardir)
+
+# Get and unpack tomcat
+turl = 'http://apache.miloslavbrada.cz/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
+cmd('wget', ['--quiet', turl])
+cmd('tar', ['xzf', basename(turl)])
 
 # Set firewall - just for now
 cmd_checked('firewall-cmd', ['--add-service=http'])
