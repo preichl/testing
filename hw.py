@@ -161,7 +161,7 @@ apache = Project(name='apache',
 # pBuild.build_all()
 
 ######################################
-# Get, pathc, build and install mod_cluster
+# get, patch, build and install mod_cluster
 ######################################
 
 cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
@@ -255,6 +255,18 @@ chdir(pardir)
 turl = 'http://apache.miloslavbrada.cz/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
 cmd('wget', ['--quiet', turl])
 cmd('tar', ['xzf', basename(turl)])
+tomcat_dir = splitext(splitext(basename(turl))[0])[0]
+cmd('cp', [
+    'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
+    'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
+    'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
+    'mod_cluster/core/target/mod_cluster-core-1.3.6.Final-SNAPSHOT.jar',
+    'mod_cluster/container-spi/target/mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar',
+    'mod_cluster/jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
+    join(tomcat_dir, 'lib')])
+
+# Copy tomcat to the same directory as apache
+cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
 # Set firewall - just for now
 cmd_checked('firewall-cmd', ['--add-service=http'])
@@ -267,4 +279,4 @@ cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 # (re)Start apache & tomcat
 cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
 
-# romcat
+# tomcat
