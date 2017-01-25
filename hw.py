@@ -4,7 +4,7 @@
 
 from glob import glob
 from sys import exit
-from subprocess import call
+from subprocess import call, check_output
 from tempfile import mkdtemp, NamedTemporaryFile
 from os import chdir, getcwd, makedirs
 from os.path import basename, splitext, join, isfile, pardir, exists
@@ -19,7 +19,22 @@ except ImportError:
 use_tmp_dir = False
 
 
+def patch_file(path_to_file, patch_text):
+    patch_file = NamedTemporaryFile('w')
+    patch_file.write(patch_text)
+    patch_file.flush()
+    cmd('patch', [path_to_file, patch_file.name])
+
+
 # Some wrappers
+def get_ip4_address():
+    command=r"""ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/'"""
+    output = check_output(command, shell=True).decode('UTF-8')
+    if len(output) and output[-1] == '\n':
+        output = output[:-1]
+    return output
+
+
 def pkg_is_installed(name):
     ret = call(['dnf', 'list', 'installed', name],
                stdout=DEVNULL, stderr=DEVNULL)
@@ -157,13 +172,12 @@ apache = Project(name='apache',
                  dependencies=[apr, apr_util])
 
 # HACK
-# pBuild = ProjectBuilder([apache, apr, apr_util])
-# pBuild.build_all()
+pBuild = ProjectBuilder([apache, apr, apr_util])
+pBuild.build_all()
 
 ######################################
 # get, patch, build and install mod_cluster
 ######################################
-
 cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
 chdir('mod_cluster')
 cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
@@ -197,7 +211,7 @@ for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertis
                 ['--finish', join(apache.get_install_dir(), 'modules')])
 
     # `make install' does nothing; do `cp' instead
-    cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')], )
+    cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')])
     chdir(pardir)
 
 # Get mod_cluster config file
@@ -205,7 +219,7 @@ url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90
 # Don't get the file again if it's already around
 if not exists(basename(url)):
             cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
-extra_conf_path = join(apache.get_install_dir(), 'conf/extra/', basename(url))
+extra_conf_path = join(apache.get_install_dir(), 'conf', 'extra', basename(url))
 cmd_checked('cp', [basename(url), extra_conf_path])
 
 # Update mod_cluster config file
@@ -251,32 +265,153 @@ cmd_checked('mvn', ['package', '-DskipTests'])
 
 chdir(pardir)
 
+# Get and build clusterbench
+cmd('git', ['clone', 'https://github.com/Karm/clusterbench.git'])
+chdir('clusterbench')
+cmd('git', ['checkout', 'origin/simplified-and-pure', '-b', 'sp'])
+cmd('mvn', ['clean', 'install', '-Pee6', '-DskipTests'])
+
+chdir(pardir)
+
 # Get and unpack tomcat
-turl = 'http://apache.miloslavbrada.cz/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
-cmd('wget', ['--quiet', turl])
+#turl = 'http://apache.miloslavbrada.cz/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
+turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
+if not exists(basename(turl)):
+    cmd('wget', ['--quiet', turl])
 cmd('tar', ['xzf', basename(turl)])
 tomcat_dir = splitext(splitext(basename(turl))[0])[0]
+
+# Install mod_cluster and jboss logging into tomcat
 cmd('cp', [
     'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/core/target/mod_cluster-core-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/container-spi/target/mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar',
-    'mod_cluster/jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
+    'jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
     join(tomcat_dir, 'lib')])
+
+# Install clusterbench into tomcat
+cmd('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
+           join(tomcat_dir, 'webapps')])
+
+ip_address = get_ip4_address()
+
+diff_1st_tomcat =\
+                  """
+34a35,38
+>   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
+>             stickySession="true"
+>             stickySessionForce="false"
+>             stickySessionRemove="true" />
+73c77
+<                redirectPort="8443" />
+---
+>                redirectPort="8443" address={0}/>
+105c109
+<     <Engine name="Catalina" defaultHost="localhost">
+---
+>     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+""".format(ip_address)
+patch_file(join(tomcat_dir, 'conf', 'server.xml'), diff_1st_tomcat)
+
+apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
 
 # Copy tomcat to the same directory as apache
 cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
+
+
+diff_2nd_tomcat =\
+                  """
+22c22
+< <Server port="8005" shutdown="SHUTDOWN">
+---
+> <Server port="8006" shutdown="SHUTDOWN">
+75c75
+<     <Connector port="8080" protocol="HTTP/1.1"
+---
+>     <Connector port="8081" protocol="HTTP/1.1"
+97c97
+<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
+---
+>     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" />
+109c109
+<     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+---
+>     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat2">
+""".format(ip_address)
+
+patch_file(join(tomcat_dir, 'conf', 'server.xml'), diff_2nd_tomcat)
+
+#
+apache_tomcat_inst_dir_2 =  join(Project.pre_inst_dir, 'at2')
+if not exists(apache_tomcat_inst_dir_2):
+    makedirs(apache_tomcat_inst_dir_2)
+
+# Copy 2nd tomcat to the same directory as apache
+chdir(tomcat_dir)
+cmd('cp', ['-r'] + glob('*') + [apache_tomcat_inst_dir_2])
+chdir(pardir)
 
 # Set firewall - just for now
 cmd_checked('firewall-cmd', ['--add-service=http'])
 cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
 cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
 cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
+cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
 cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
 cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
-# (re)Start apache & tomcat
+# (re)Start apache
 cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
 
-# tomcat
+# Start tomcat
+cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
+cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'), ['start'])
+
+#remove
+# 93c97
+# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
+# ---
+# >     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
+
+# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
+# < 
+# ---
+# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
+#                   """
+# 35c35,39
+# < 
+# ---
+# >   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
+# > 	    stickySession="true"
+# > 	    stickySessionForce="false"
+# > 	    stickySessionRemove="true"
+# > 	    />
+# 98c98
+# <     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" />
+# ---
+# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address={0} />
+# 105c109
+# <     <Engine name="Catalina" defaultHost="localhost">
+# ---
+# >     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+# 22c22
+# < <Server port="8005" shutdown="SHUTDOWN">
+# ---
+# > <Server port="8006" shutdown="SHUTDOWN">
+# 39a40
+# > 
+# 75c76
+# <     <Connector port="8080" protocol="HTTP/1.1 "
+# ---
+# >     <Connector port="8081" protocol="HTTP/1.1 "
+# 97,98c98
+# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address={0} />
+# < 
+# ---
+# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address={0} />
+# 109c109
+# <     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+# ---
+# >     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat2">
