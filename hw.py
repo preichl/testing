@@ -282,7 +282,7 @@ cmd('tar', ['xzf', basename(turl)])
 tomcat_dir = splitext(splitext(basename(turl))[0])[0]
 
 # Install mod_cluster and jboss logging into tomcat
-cmd('cp', [
+cmd_checked('cp', [
     'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
     'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
@@ -292,27 +292,27 @@ cmd('cp', [
     join(tomcat_dir, 'lib')])
 
 # Install clusterbench into tomcat
-cmd('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
-           join(tomcat_dir, 'webapps')])
+cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
+                   join(tomcat_dir, 'webapps')])
 
 ip_address = get_ip4_address()
 
 diff_1st_tomcat =\
                   """
-34a35,38
 >   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
->             stickySession="true"
->             stickySessionForce="false"
->             stickySessionRemove="true" />
-73c77
-<                redirectPort="8443" />
+> 	    stickySession="true"
+> 	    stickySessionForce="false"
+> 	    stickySessionRemove="true" />
+93c97
+<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
 ---
->                redirectPort="8443" address={0}/>
+>     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
 105c109
 <     <Engine name="Catalina" defaultHost="localhost">
 ---
 >     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
 """.format(ip_address)
+
 patch_file(join(tomcat_dir, 'conf', 'server.xml'), diff_1st_tomcat)
 
 apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
@@ -332,9 +332,9 @@ diff_2nd_tomcat =\
 ---
 >     <Connector port="8081" protocol="HTTP/1.1"
 97c97
-<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
+<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
 ---
->     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" />
+>     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
 109c109
 <     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
 ---
