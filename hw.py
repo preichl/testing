@@ -23,7 +23,7 @@ def patch_file(path_to_file, patch_text):
     patch_file = NamedTemporaryFile('w')
     patch_file.write(patch_text)
     patch_file.flush()
-    cmd('patch', [path_to_file, patch_file.name])
+    cmd_checked('patch', [path_to_file, patch_file.name])
 
 
 # Some wrappers
@@ -172,8 +172,8 @@ apache = Project(name='apache',
                  dependencies=[apr, apr_util])
 
 # HACK
-pBuild = ProjectBuilder([apache, apr, apr_util])
-pBuild.build_all()
+# pBuild = ProjectBuilder([apache, apr, apr_util])
+# pBuild.build_all()
 
 ######################################
 # get, patch, build and install mod_cluster
@@ -299,6 +299,7 @@ ip_address = get_ip4_address()
 
 diff_1st_tomcat =\
                   """
+34a35,38
 >   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
 > 	    stickySession="true"
 > 	    stickySessionForce="false"
