@@ -21,6 +21,7 @@ use_tmp_dir = False
 
 work_dir = getcwd()
 
+
 class Connection:
     """A simple connection class"""
 
@@ -186,43 +187,6 @@ class ProjectBuilder:
             print("Failed to resolve projects")
 
 
-# # HACK
-
-# opts = {
-#     'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
-#     'req_num': 10,
-#     'print-response': True,
-#     'print-request': False,
-#     }
-# conn = Connection(server=get_ip4_address(),
-#                   port=6666,
-#                   path='/clusterbench/requestinfo')
-
-# route = None
-# # Route is same for all the requests
-# for i in range(10):
-#     body = conn.send_req_get_body()
-
-#     for line in body:
-#         if line.find(':') != -1:
-#             p = 'JVM route: '
-#             if len(line) > len(p) and line[:len(p)] == p:
-#                 tmp = line[len(p):]
-#                 if route == None:
-#                     route = tmp
-#                 elif route != tmp:
-#                     print('Unexpected route!')    
-#                     exit(1)
-
-
-
-# #exit(0)
-# # in progress - ignore
-# import subprocess
-# pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
-# print(pl)
-# exit(1)
-
 #######################################################################
 # Dependency stage
 print("Check and install required packages")
@@ -260,140 +224,186 @@ apache = Project(name='apache',
                  url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',
                  dependencies=[apr, apr_util])
 
-# HACK
-pBuild = ProjectBuilder([apache, apr, apr_util])
-pBuild.build_all()
 
-######################################
-# get, patch, build and install mod_cluster
-######################################
-cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
-chdir('mod_cluster')
-cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
-chdir('native')
+def prepare_mod_cluster():
+    ######################################
+    # get, patch, build and install mod_cluster
+    ######################################
+    cmd('git', ['clone', 'https://github.com/modcluster/mod_cluster.git'])
+    chdir('mod_cluster')
+    cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
+    chdir('native')
 
-# Patching mod_cluster version to show apache banner
-chdir('mod_manager')
-patch_file('mod_manager.c',
-            join(work_dir, 'diffs', 'banner_patch.diff'))
-chdir(pardir)
+    # Patching mod_cluster version to show apache banner
+    # chdir('mod_manager')
+    # patch_file('mod_manager.c',
+    #            join(work_dir, 'diffs', 'banner_patch.diff'))
+    # chdir(pardir)
 
-# build & install
-for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertise']:
-    print('Building mod: {0}'.format(mod))
-    chdir(mod)
-    cmd_checked('./buildconf')
-    cmd_checked('./configure',
-                ['--with-apxs={0}'.format(join(apache.get_install_dir(), 'bin/apxs'))])
-    cmd_checked('make')
-    cmd_checked('libtool',
-                ['--finish', join(apache.get_install_dir(), 'modules')])
+    # build & install
+    for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertise']:
+        print('Building mod: {0}'.format(mod))
+        chdir(mod)
+        cmd_checked('./buildconf')
+        cmd_checked('./configure',
+                    ['--with-apxs={0}'.format(join(apache.get_install_dir(), 'bin/apxs'))])
+        cmd_checked('make')
+        cmd_checked('libtool',
+                    ['--finish', join(apache.get_install_dir(), 'modules')])
 
-    # `make install' does nothing; do `cp' instead
-    cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')])
+        # `make install' does nothing; do `cp' instead
+        cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')])
+        chdir(pardir)
+
+    # Get mod_cluster config file
+    url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'
+    # Don't get the file again if it's already around
+    if not exists(basename(url)):
+        cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
+    extra_conf_path = join(apache.get_install_dir(), 'conf', 'extra', basename(url))
+    cmd_checked('cp', [basename(url), extra_conf_path])
+
+    # Update mod_cluster config file
+    cache_dir = join(apache.get_install_dir(), 'cache')
+    if not exists(cache_dir):
+        makedirs(cache_dir)
+    cmd_checked('sed',
+                ['-i',
+                 's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'
+                 .format(join(cache_dir, 'mod_cluster')),
+                 extra_conf_path])
+
+    # Move from mod_cluster/native  to mod_cluster and build it's java libraries
+    chdir(pardir)
+    cmd_checked('mvn', ['package', '-DskipTests'])
+
+if __name__ == '__main__':
+
+    cmd('killall', ['java', 'httpd'])
+
+    # HACK
+    pBuild = ProjectBuilder([apache, apr, apr_util])
+    pBuild.build_all()
+
+    prepare_mod_cluster()
+
+    # Update apache config file
+    conf_path = join(apache.get_install_dir(), 'conf/httpd.conf')
+    patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
+
+    # Get and build jboss logging
+    chdir(pardir)
+    cmd('git', ['clone', 'https://github.com/jboss-logging/jboss-logging.git'])
+    chdir('jboss-logging')
+    cmd_checked('mvn', ['package', '-DskipTests'])
+
     chdir(pardir)
 
-# Get mod_cluster config file
-url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'
-# Don't get the file again if it's already around
-if not exists(basename(url)):
-            cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
-extra_conf_path = join(apache.get_install_dir(), 'conf', 'extra', basename(url))
-cmd_checked('cp', [basename(url), extra_conf_path])
+    # Get and build clusterbench
+    cmd('git', ['clone', 'https://github.com/Karm/clusterbench.git'])
+    chdir('clusterbench')
+    cmd('git', ['checkout', 'origin/simplified-and-pure', '-b', 'sp'])
+    cmd('mvn', ['clean', 'install', '-Pee6', '-DskipTests'])
 
-# Update mod_cluster config file
-cache_dir = join(apache.get_install_dir(), 'cache')
-if not exists(cache_dir):
-    makedirs(cache_dir)
-cmd_checked('sed',
-            ['-i',
-             's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'
-             .format(join(cache_dir, 'mod_cluster')),
-             extra_conf_path])
+    chdir(pardir)
 
-# Update apache config file
-conf_path = join(apache.get_install_dir(), 'conf/httpd.conf')
-patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
+    # Get and unpack tomcat
+    turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
+    if not exists(basename(turl)):
+        cmd('wget', ['--quiet', turl])
+    cmd('tar', ['xzf', basename(turl)])
+    tomcat_dir = splitext(splitext(basename(turl))[0])[0]
 
-# Move from mod_cluster/native  to mod_cluster and build it's java libraries
-chdir(pardir)
-cmd_checked('mvn', ['package', '-DskipTests'])
+    # Install mod_cluster and jboss logging into tomcat
+    cmd_checked('cp', [
+        'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
+        'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
+        'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
+        'mod_cluster/core/target/mod_cluster-core-1.3.6.Final-SNAPSHOT.jar',
+        'mod_cluster/container-spi/target/mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar',
+        'jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
+        join(tomcat_dir, 'lib')])
 
-# Get and build jboss logging
-chdir(pardir)
-cmd('git', ['clone', 'https://github.com/jboss-logging/jboss-logging.git'])
-chdir('jboss-logging')
-cmd_checked('mvn', ['package', '-DskipTests'])
+    # Install clusterbench into tomcat
+    cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
+                       join(tomcat_dir, 'webapps')])
 
-chdir(pardir)
+    ip_address = get_ip4_address()
 
-# Get and build clusterbench
-cmd('git', ['clone', 'https://github.com/Karm/clusterbench.git'])
-chdir('clusterbench')
-cmd('git', ['checkout', 'origin/simplified-and-pure', '-b', 'sp'])
-cmd('mvn', ['clean', 'install', '-Pee6', '-DskipTests'])
+    patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+               join(work_dir, 'diffs', 'tomcat1_patch.diff'),
+               format=[ip_address])
 
-chdir(pardir)
+    apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
 
-# Get and unpack tomcat
-#turl = 'http://apache.miloslavbrada.cz/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
-turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
-if not exists(basename(turl)):
-    cmd('wget', ['--quiet', turl])
-cmd('tar', ['xzf', basename(turl)])
-tomcat_dir = splitext(splitext(basename(turl))[0])[0]
+    # Copy tomcat to the same directory as apache
+    cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
-# Install mod_cluster and jboss logging into tomcat
-cmd_checked('cp', [
-    'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
-    'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
-    'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
-    'mod_cluster/core/target/mod_cluster-core-1.3.6.Final-SNAPSHOT.jar',
-    'mod_cluster/container-spi/target/mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar',
-    'jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
-    join(tomcat_dir, 'lib')])
+    patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+               join(work_dir, 'diffs', 'tomcat2_patch.diff'),
+               format=[ip_address])
 
-# Install clusterbench into tomcat
-cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
-                   join(tomcat_dir, 'webapps')])
+    
+    apache_tomcat_inst_dir_2 =  join(Project.pre_inst_dir, 'at2')
+    if not exists(apache_tomcat_inst_dir_2):
+        makedirs(apache_tomcat_inst_dir_2)
 
-ip_address = get_ip4_address()
+    # Copy 2nd tomcat to the same directory as apache
+    chdir(tomcat_dir)
+    cmd('cp', ['-r'] + glob('*') + [apache_tomcat_inst_dir_2])
+    chdir(pardir)
 
-patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-            join(work_dir, 'diffs', 'tomcat1_patch.diff'),
-            format=[ip_address])
+    # Set firewall - just for now
+    cmd_checked('firewall-cmd', ['--add-service=http'])
+    cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
+    cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
+    cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
+    cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
+    cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
+    cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
-apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
+    # (re)Start apache
+    cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
 
-# Copy tomcat to the same directory as apache
-cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
+    # Start tomcat
+    cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
+    cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'), ['start'])
 
-patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-           join(work_dir, 'diffs', 'tomcat2_patch.diff'),
-           format=[ip_address])
 
-#
-apache_tomcat_inst_dir_2 =  join(Project.pre_inst_dir, 'at2')
-if not exists(apache_tomcat_inst_dir_2):
-    makedirs(apache_tomcat_inst_dir_2)
 
-# Copy 2nd tomcat to the same directory as apache
-chdir(tomcat_dir)
-cmd('cp', ['-r'] + glob('*') + [apache_tomcat_inst_dir_2])
-chdir(pardir)
+# # HACK
 
-# Set firewall - just for now
-cmd_checked('firewall-cmd', ['--add-service=http'])
-cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
-cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
-cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
-cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
-cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
-cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
+# opts = {
+#     'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
+#     'req_num': 10,
+#     'print-response': True,
+#     'print-request': False,
+#     }
+# conn = Connection(server=get_ip4_address(),
+#                   port=6666,
+#                   path='/clusterbench/requestinfo')
 
-# (re)Start apache
-cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
+# route = None
+# # Route is same for all the requests
+# for i in range(10):
+#     body = conn.send_req_get_body()
 
-# Start tomcat
-cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
-cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'), ['start'])
+#     for line in body:
+#         if line.find(':') != -1:
+#             p = 'JVM route: '
+#             if len(line) > len(p) and line[:len(p)] == p:
+#                 tmp = line[len(p):]
+#                 if route == None:
+#                     route = tmp
+#                 elif route != tmp:
+#                     print('Unexpected route!')    
+#                     exit(1)
+
+
+
+# #exit(0)
+# # in progress - ignore
+# import subprocess
+# pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
+# print(pl)
+# exit(1)
