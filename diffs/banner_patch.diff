@@ -1,3 +1,4 @@
+2850c2850
 <     ap_rvputs(r, "<h1>", MOD_CLUSTER_EXPOSED_VERSION, "</h1>", NULL);
 ---
 >     ap_rvputs(r, "<h1>", ap_get_server_banner(), "</h1>", NULL);
