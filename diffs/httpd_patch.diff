@@ -1,0 +1,11 @@
+115c115
+< #LoadModule proxy_module modules/mod_proxy.so
+---
+> LoadModule proxy_module modules/mod_proxy.so
+123c123
+< #LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
+---
+> LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
+453a454,455
+>  
+> Include conf/extra/mod_cluster.conf

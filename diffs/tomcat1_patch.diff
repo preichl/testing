@@ -1,0 +1,13 @@
+34a35,38
+>   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
+> 	    stickySession="true"
+> 	    stickySessionForce="false"
+> 	    stickySessionRemove="true" />
+93c97
+<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
+---
+>     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
+105c109
+<     <Engine name="Catalina" defaultHost="localhost">
+---
+>     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">

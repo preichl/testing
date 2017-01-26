@@ -19,6 +19,8 @@ except ImportError:
 
 use_tmp_dir = False
 
+work_dir = getcwd()
+
 class Connection:
     """A simple connection class"""
 
@@ -62,11 +64,18 @@ class Connection:
         return body
 
 
-def patch_file(path_to_file, patch_text):
-    with NamedTemporaryFile('w') as patch_file:
-        patch_file.write(patch_text)
-        patch_file.flush()
-        cmd('patch', [path_to_file, patch_file.name], sout=None)
+def patch_file(path_to_file, patch_name, format = []):
+    with open(patch_name, 'r') as patch_file:
+        patch_text = patch_file.read()
+        # Patch may need to fill into templates
+        if format:
+            patch_text = patch_text.format(*format)
+
+    with NamedTemporaryFile('w') as tmp_file:
+        tmp_file.write(patch_text)
+        tmp_file.flush()
+                
+        cmd('patch', [path_to_file, tmp_file.name], sout=None)
 
 
 # Some wrappers
@@ -177,42 +186,42 @@ class ProjectBuilder:
             print("Failed to resolve projects")
 
 
-# HACK
+# # HACK
 
-opts = {
-    'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
-    'req_num': 10,
-    'print-response': True,
-    'print-request': False,
-    }
-conn = Connection(server=get_ip4_address(),
-                  port=6666,
-                  path='/clusterbench/requestinfo')
+# opts = {
+#     'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
+#     'req_num': 10,
+#     'print-response': True,
+#     'print-request': False,
+#     }
+# conn = Connection(server=get_ip4_address(),
+#                   port=6666,
+#                   path='/clusterbench/requestinfo')
 
-route = None
-# Route is same for all the requests
-for i in range(10):
-    body = conn.send_req_get_body()
+# route = None
+# # Route is same for all the requests
+# for i in range(10):
+#     body = conn.send_req_get_body()
 
-    for line in body:
-        if line.find(':') != -1:
-            p = 'JVM route: '
-            if len(line) > len(p) and line[:len(p)] == p:
-                tmp = line[len(p):]
-                if route == None:
-                    route = tmp
-                elif route != tmp:
-                    print('Unexpected route!')    
-                    exit(1)
+#     for line in body:
+#         if line.find(':') != -1:
+#             p = 'JVM route: '
+#             if len(line) > len(p) and line[:len(p)] == p:
+#                 tmp = line[len(p):]
+#                 if route == None:
+#                     route = tmp
+#                 elif route != tmp:
+#                     print('Unexpected route!')    
+#                     exit(1)
 
 
 
-#exit(0)
-# in progress - ignore
-import subprocess
-pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
-print(pl)
-exit(1)
+# #exit(0)
+# # in progress - ignore
+# import subprocess
+# pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
+# print(pl)
+# exit(1)
 
 #######################################################################
 # Dependency stage
@@ -264,16 +273,9 @@ cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
 chdir('native')
 
 # Patching mod_cluster version to show apache banner
-banner_path_text =\
-              """
-2850c2850
-<     ap_rvputs(r, "<h1>", MOD_CLUSTER_EXPOSED_VERSION, "</h1>", NULL);
----
->     ap_rvputs(r, "<h1>", ap_get_server_banner(), "</h1>", NULL);
-"""
-
 chdir('mod_manager')
-patch_file('mod_manager.c', banner_path_text)
+patch_file('mod_manager.c',
+            join(work_dir, 'diffs', 'banner_patch.diff'))
 chdir(pardir)
 
 # build & install
@@ -311,21 +313,7 @@ cmd_checked('sed',
 
 # Update apache config file
 conf_path = join(apache.get_install_dir(), 'conf/httpd.conf')
-diff_text =\
-            """
-115c115
-< #LoadModule proxy_module modules/mod_proxy.so
----
-> LoadModule proxy_module modules/mod_proxy.so
-123c123
-< #LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
----
-> LoadModule proxy_ajp_module modules/mod_proxy_ajp.so
-453a454,455
->  
-> Include conf/extra/mod_cluster.conf
-"""
-patch_file(conf_path, diff_text)
+patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
 
 # Move from mod_cluster/native  to mod_cluster and build it's java libraries
 chdir(pardir)
@@ -371,52 +359,18 @@ cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web','target','cluster
 
 ip_address = get_ip4_address()
 
-diff_1st_tomcat =\
-                  """
-34a35,38
->   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
-> 	    stickySession="true"
-> 	    stickySessionForce="false"
-> 	    stickySessionRemove="true" />
-93c97
-<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
----
->     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
-105c109
-<     <Engine name="Catalina" defaultHost="localhost">
----
->     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
-""".format(ip_address)
-
-patch_file(join(tomcat_dir, 'conf', 'server.xml'), diff_1st_tomcat)
+patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+            join(work_dir, 'diffs', 'tomcat1_patch.diff'),
+            format=[ip_address])
 
 apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
 
 # Copy tomcat to the same directory as apache
 cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
-
-diff_2nd_tomcat =\
-                  """
-22c22
-< <Server port="8005" shutdown="SHUTDOWN">
----
-> <Server port="8006" shutdown="SHUTDOWN">
-75c75
-<     <Connector port="8080" protocol="HTTP/1.1"
----
->     <Connector port="8081" protocol="HTTP/1.1"
-97c97
-<     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
----
->     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
-109c109
-<     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
----
->     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat2">
-""".format(ip_address)
-
-patch_file(join(tomcat_dir, 'conf', 'server.xml'), diff_2nd_tomcat)
+patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+           join(work_dir, 'diffs', 'tomcat2_patch.diff'),
+           format=[ip_address])
 
 #
 apache_tomcat_inst_dir_2 =  join(Project.pre_inst_dir, 'at2')
