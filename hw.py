@@ -115,7 +115,7 @@ def cmd_checked(command, params=[], sout=DEVNULL):
 class Project:
     """A class encapsulating getting and building project"""
     # HACK
-    pre_inst_dir = '/tmp/usr/local/'
+    pre_inst_dir = '/tmp'
 
     def __init__(self, name, url, dependencies):
         self.name = name
@@ -194,9 +194,6 @@ def install_pkgs(pkgs_to_check):
 
 
 def prepare_autotools_projects(skip=False):
-    if skip:
-        return
-    
     apr = Project(name='apr',
                   url='http://apache.miloslavbrada.cz/apr/apr-1.5.2.tar.bz2',
                   dependencies=[])
@@ -207,11 +204,14 @@ def prepare_autotools_projects(skip=False):
                      url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',
                      dependencies=[apr, apr_util])
 
-    pBuild = ProjectBuilder([apache, apr, apr_util])
-    pBuild.build_all()
+    if not skip:
+        pBuild = ProjectBuilder([apache, apr, apr_util])
+        pBuild.build_all()
+
+    return {'apache': apache}
 
 
-def prepare_mod_cluster():
+def prepare_mod_cluster(work_dir, apache):
     ######################################
     # get, patch, build and install mod_cluster
     ######################################
@@ -232,7 +232,7 @@ def prepare_mod_cluster():
         chdir(mod)
         cmd_checked('./buildconf')
         cmd_checked('./configure',
-                    ['--with-apxs={0}'.format(join(apache.get_install_dir(), 'bin/apxs'))])
+                    ['--with-apxs={0}'.format(join(apache.get_install_dir(), 'bin', 'apxs'))])
         cmd_checked('make')
         cmd_checked('libtool',
                     ['--finish', join(apache.get_install_dir(), 'modules')])
@@ -266,15 +266,20 @@ def prepare_mod_cluster():
 
 if __name__ == '__main__':
 
-    pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
-                    'autoconf', 'libtool', 'patch']
-
-    tmp_dir = mkdtemp()
     work_dir = getcwd()
 
-    # Setting just for testing...
-    pkg_to_check = []
-    tmp_dir = getcwd()
+    if False:
+        pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
+                         'autoconf', 'libtool', 'patch']
+
+        tmp_dir = mkdtemp()
+        skip=False
+    else:
+        # Setting just for testing...
+        pkgs_to_check = []
+        tmp_dir = getcwd()
+        Project.pre_inst_dir = '/tmp/usr/local/'
+        skip=True
 
     install_pkgs(pkgs_to_check)
 
@@ -283,11 +288,11 @@ if __name__ == '__main__':
 
     cmd('killall', ['java', 'httpd'])
 
-    prepare_autotools_projects()
-    prepare_mod_cluster()
+    projects = prepare_autotools_projects(skip)
+    prepare_mod_cluster(work_dir, projects['apache'])
 
     # Update apache config file
-    conf_path = join(apache.get_install_dir(), 'conf/httpd.conf')
+    conf_path = join(projects['apache'].get_install_dir(), 'conf', 'httpd.conf')
     patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
 
     # Get and build jboss logging
@@ -315,12 +320,12 @@ if __name__ == '__main__':
 
     # Install mod_cluster and jboss logging into tomcat
     cmd_checked('cp', [
-        'mod_cluster/container/tomcat8/target/mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar',
-        'mod_cluster/container/catalina-standalone/target/mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar',
-        'mod_cluster/container/catalina/target/mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar',
-        'mod_cluster/core/target/mod_cluster-core-1.3.6.Final-SNAPSHOT.jar',
-        'mod_cluster/container-spi/target/mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar',
-        'jboss-logging/target/jboss-logging-3.3.1.Final-SNAPSHOT.jar',
+        join('mod_cluster','container','tomcat8','target','mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster','container','catalina-standalone','target','mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster','container','catalina','target','mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster','core','target','mod_cluster-core-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster','container-spi','target','mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar'),
+        join('jboss-logging','target','jboss-logging-3.3.1.Final-SNAPSHOT.jar'),
         join(tomcat_dir, 'lib')])
 
     # Install clusterbench into tomcat
@@ -362,7 +367,8 @@ if __name__ == '__main__':
     cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
     # (re)Start apache
-    cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
+    cmd_checked(join(projects['apache'].get_install_dir(),
+                     'bin', 'apachectl'), ['restart'])
 
     # Start tomcat
     cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
