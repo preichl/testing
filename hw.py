@@ -8,6 +8,7 @@ from subprocess import call, check_output
 from tempfile import mkdtemp, NamedTemporaryFile
 from os import chdir, getcwd, makedirs
 from os.path import basename, splitext, join, isfile, pardir, exists
+from socket import socket
 
 try:
     from subprocess import DEVNULL  # py3k
@@ -18,19 +19,61 @@ except ImportError:
 
 use_tmp_dir = False
 
+class Connection:
+    """A simple connection class"""
+
+    def __init__(self, server, port, path):
+        self.server = server
+        self.port = port
+        self.path = path
+        self.sc = None
+
+
+    def send_req_get_body(self):
+        addr = self.server, self.port
+        req = "GET {0} HTTP/1.1\r\nHost: {1}\r\n".format(self.path, self.server)
+
+        if self.sc:
+            req = req + 'Cookie: {0}\r\n'.format(self.sc)
+
+        req = req + '\r\n'
+
+        s = socket()
+        r = s.connect(addr)
+        req_len = s.send(req.encode())
+
+        resp = s.recv(4096).decode()
+
+        headers = True
+        body = []
+
+        for line in resp.split('\n'):
+            if line == '\r': # End of headers
+                headers = False
+            if headers:
+               if line.find(':') != -1:
+                    tmp = line.split(':')
+                    name, value = tmp[0], tmp[1]
+                    if name.lower() == 'set-cookie' and\
+                       value.lower().find('expires=') == -1:
+                        self.sc = value
+            else:
+                body.append(line)
+        return body
+
 
 def patch_file(path_to_file, patch_text):
-    patch_file = NamedTemporaryFile('w')
-    patch_file.write(patch_text)
-    patch_file.flush()
-    cmd_checked('patch', [path_to_file, patch_file.name])
+    with NamedTemporaryFile('w') as patch_file:
+        patch_file.write(patch_text)
+        patch_file.flush()
+        cmd('patch', [path_to_file, patch_file.name], sout=None)
 
 
 # Some wrappers
 def get_ip4_address():
     command=r"""ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/'"""
     output = check_output(command, shell=True).decode('UTF-8')
-    if len(output) and output[-1] == '\n':
+    if output and output[-1] == '\n':
         output = output[:-1]
     return output
 
@@ -134,6 +177,43 @@ class ProjectBuilder:
             print("Failed to resolve projects")
 
 
+# HACK
+
+opts = {
+    'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
+    'req_num': 10,
+    'print-response': True,
+    'print-request': False,
+    }
+conn = Connection(server=get_ip4_address(),
+                  port=6666,
+                  path='/clusterbench/requestinfo')
+
+route = None
+# Route is same for all the requests
+for i in range(10):
+    body = conn.send_req_get_body()
+
+    for line in body:
+        if line.find(':') != -1:
+            p = 'JVM route: '
+            if len(line) > len(p) and line[:len(p)] == p:
+                tmp = line[len(p):]
+                if route == None:
+                    route = tmp
+                elif route != tmp:
+                    print('Unexpected route!')    
+                    exit(1)
+
+
+
+#exit(0)
+# in progress - ignore
+import subprocess
+pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
+print(pl)
+exit(1)
+
 #######################################################################
 # Dependency stage
 print("Check and install required packages")
@@ -172,8 +252,8 @@ apache = Project(name='apache',
                  dependencies=[apr, apr_util])
 
 # HACK
-# pBuild = ProjectBuilder([apache, apr, apr_util])
-# pBuild.build_all()
+pBuild = ProjectBuilder([apache, apr, apr_util])
+pBuild.build_all()
 
 ######################################
 # get, patch, build and install mod_cluster
@@ -184,19 +264,16 @@ cmd('git', ['checkout', 'origin/1.3.x', '-b', '1.3.x'])
 chdir('native')
 
 # Patching mod_cluster version to show apache banner
-banner_path =\
+banner_path_text =\
               """
 2850c2850
 <     ap_rvputs(r, "<h1>", MOD_CLUSTER_EXPOSED_VERSION, "</h1>", NULL);
 ---
 >     ap_rvputs(r, "<h1>", ap_get_server_banner(), "</h1>", NULL);
 """
-banner_path_file = NamedTemporaryFile('w')
-banner_path_file.write(banner_path)
-banner_path_file.flush()
 
 chdir('mod_manager')
-cmd('patch', ['mod_manager.c', banner_path_file.name])
+patch_file('mod_manager.c', banner_path_text)
 chdir(pardir)
 
 # build & install
@@ -248,10 +325,7 @@ diff_text =\
 >  
 > Include conf/extra/mod_cluster.conf
 """
-diff_file = NamedTemporaryFile('w')
-diff_file.write(diff_text)
-diff_file.flush()
-cmd('patch', [conf_path, diff_file.name], sout=None)
+patch_file(conf_path, diff_text)
 
 # Move from mod_cluster/native  to mod_cluster and build it's java libraries
 chdir(pardir)
@@ -369,50 +443,3 @@ cmd_checked(join(apache.get_install_dir(), 'bin', 'apachectl'), ['restart'])
 # Start tomcat
 cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
 cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'), ['start'])
-
-#remove
-# 93c97
-# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" />
-# ---
-# >     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
-
-# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
-# < 
-# ---
-# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address="172.28.128.6"/>
-#                   """
-# 35c35,39
-# < 
-# ---
-# >   <Listener className="org.jboss.modcluster.container.catalina.standalone.ModClusterListener"
-# > 	    stickySession="true"
-# > 	    stickySessionForce="false"
-# > 	    stickySessionRemove="true"
-# > 	    />
-# 98c98
-# <     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" />
-# ---
-# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address={0} />
-# 105c109
-# <     <Engine name="Catalina" defaultHost="localhost">
-# ---
-# >     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
-# 22c22
-# < <Server port="8005" shutdown="SHUTDOWN">
-# ---
-# > <Server port="8006" shutdown="SHUTDOWN">
-# 39a40
-# > 
-# 75c76
-# <     <Connector port="8080" protocol="HTTP/1.1 "
-# ---
-# >     <Connector port="8081" protocol="HTTP/1.1 "
-# 97,98c98
-# <     <Connector port="8009" protocol="AJP/1.3" redirectPort="8443" address={0} />
-# < 
-# ---
-# >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address={0} />
-# 109c109
-# <     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
-# ---
-# >     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat2">
