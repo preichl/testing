@@ -17,11 +17,6 @@ except ImportError:
     DEVNULL = open(os.devnull, 'wb')
 
 
-use_tmp_dir = False
-
-work_dir = getcwd()
-
-
 class Connection:
     """A simple connection class"""
 
@@ -166,7 +161,6 @@ class ProjectBuilder:
         return None
 
     def _build_proj(self, proj):
-        # HACK
         if not isfile(proj.get_arch_name()):
             proj.download()
         proj.unpack()
@@ -187,42 +181,34 @@ class ProjectBuilder:
             print("Failed to resolve projects")
 
 
-#######################################################################
-# Dependency stage
-print("Check and install required packages")
-pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
-                'autoconf', 'libtool', 'patch']
-# HACK
-pkg_to_check = []
-for pkg in pkg_to_check:
+def install_pkgs(pkgs_to_check):
+    print("Check and install required packages")
+    for pkg in pkgs_to_check:
 
-    if not pkg_is_installed(pkg):
-        print('{0} is not installed.'.format(pkg))
-        ret = pkg_install(pkg)
-        print('Result {0}.'.format(ret))
-    else:
-        print('{0} is installed.'.format(pkg))
+        if not pkg_is_installed(pkg):
+            print('{0} is not installed.'.format(pkg))
+            ret = pkg_install(pkg)
+            print('Result {0}.'.format(ret))
+        else:
+            print('{0} is installed.'.format(pkg))
 
-#######################################################################
-# Download & unpack stage
 
-if use_tmp_dir:
-    tmp_dir = mkdtemp()
-else:
-    tmp_dir = getcwd()
+def prepare_autotools_projects(skip=False):
+    if skip:
+        return
+    
+    apr = Project(name='apr',
+                  url='http://apache.miloslavbrada.cz/apr/apr-1.5.2.tar.bz2',
+                  dependencies=[])
+    apr_util = Project(name='apr-util',
+                       url='http://apache.miloslavbrada.cz/apr/apr-util-1.5.4.tar.bz2',
+                       dependencies=[apr])
+    apache = Project(name='apache',
+                     url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',
+                     dependencies=[apr, apr_util])
 
-print("Changing to {0}".format(tmp_dir))
-chdir(tmp_dir)
-
-apr = Project(name='apr',
-              url='http://apache.miloslavbrada.cz/apr/apr-1.5.2.tar.bz2',
-              dependencies=[])
-apr_util = Project(name='apr-util',
-                   url='http://apache.miloslavbrada.cz/apr/apr-util-1.5.4.tar.bz2',
-                   dependencies=[apr])
-apache = Project(name='apache',
-                 url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',
-                 dependencies=[apr, apr_util])
+    pBuild = ProjectBuilder([apache, apr, apr_util])
+    pBuild.build_all()
 
 
 def prepare_mod_cluster():
@@ -236,8 +222,8 @@ def prepare_mod_cluster():
 
     # Patching mod_cluster version to show apache banner
     # chdir('mod_manager')
-    # patch_file('mod_manager.c',
-    #            join(work_dir, 'diffs', 'banner_patch.diff'))
+    patch_file(join('mod_manager','mod_manager.c'),
+               join(work_dir, 'diffs', 'banner_patch.diff'))
     # chdir(pardir)
 
     # build & install
@@ -277,14 +263,27 @@ def prepare_mod_cluster():
     chdir(pardir)
     cmd_checked('mvn', ['package', '-DskipTests'])
 
+
 if __name__ == '__main__':
+
+    pkg_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
+                    'autoconf', 'libtool', 'patch']
+
+    tmp_dir = mkdtemp()
+    work_dir = getcwd()
+
+    # Setting just for testing...
+    pkg_to_check = []
+    tmp_dir = getcwd()
+
+    install_pkgs(pkgs_to_check)
+
+    print("Changing to {0}".format(tmp_dir))
+    chdir(tmp_dir)
 
     cmd('killall', ['java', 'httpd'])
 
-    # HACK
-    pBuild = ProjectBuilder([apache, apr, apr_util])
-    pBuild.build_all()
-
+    prepare_autotools_projects()
     prepare_mod_cluster()
 
     # Update apache config file
