@@ -61,8 +61,14 @@ def pkg_is_installed(name):
     return False
 
 
+def pkg_update():
+    ret = call(['dnf', 'update', '-y'])
+    if ret == 0:
+        return True
+    return False
+
 def pkg_install(pkg):
-    ret = call(['dnf', 'install', pkg])
+    ret = call(['dnf', 'install', '-y', pkg])
     if ret == 0:
         return True
     return False
@@ -250,7 +256,7 @@ def main():
     work_dir = getcwd()
 
     pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
-                     'autoconf', 'libtool', 'patch']
+                     'autoconf', 'libtool', 'patch', 'psmisc']
 
     tmp_dir = mkdtemp()
     Project.pre_inst_dir = join('/', 'usr', 'local')
@@ -261,6 +267,7 @@ def main():
     # tmp_dir = getcwd()
     # skip = True
 
+    pkg_update()
     install_pkgs(pkgs_to_check)
 
     print("Changing to {0}".format(tmp_dir))
