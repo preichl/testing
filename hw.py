@@ -1,31 +1,36 @@
 #!/usr/bin/python3
+"""Test for apache-tomcat running mod_cluseter and apache as a proxy"""
 
 # todo env
 
 import sys
-import os
 import http.cookiejar
-from os import chdir, getcwd, makedirs, kill
+from os import chdir, getcwd, makedirs, kill, utime, environ
 from os.path import basename, splitext, join, isfile, pardir, exists, dirname
 from glob import glob
 from subprocess import call, check_output, DEVNULL
 from tempfile import mkdtemp, NamedTemporaryFile
-from socket import socket
 from signal import SIGKILL
+from urllib.error import HTTPError
 from urllib.request import (urlopen, build_opener, install_opener,
                             HTTPCookieProcessor, Request)
 from time import sleep
-from urllib.error import HTTPError
 
 
 def touch(fname):
+    """Touch a file"""
+
     if exists(fname):
-        os.utime(fname, None)
+        utime(fname, None)
     else:
         open(fname, 'a').close()
 
 
-def patch_file(file_to_patch, patch_name, template=[]):
+def patch_file(file_to_patch, patch_name, template=None):
+    """Patch a file"""
+
+    if template is None:
+        template = []
     with open(patch_name, 'r') as diff_file:
         diff_text = diff_file.read()
         # Patch may need to fill into templates
@@ -63,7 +68,9 @@ def pkg_install(pkg):
     return False
 
 
-def cmd(command, params=[], sout=DEVNULL, env=None):
+def cmd(command, params=None, sout=DEVNULL, env=None):
+    if params is None:
+        params = []
     print('{0} {1}'.format(command, ' '.join(params)))
     ret = call([command] + params, stdout=sout, env=env)
     if ret != 0:
@@ -71,7 +78,9 @@ def cmd(command, params=[], sout=DEVNULL, env=None):
     return ret
 
 
-def cmd_checked(command, params=[], sout=DEVNULL, env=None):
+def cmd_checked(command, params=None, sout=DEVNULL, env=None):
+    if params is None:
+        params = []
     if cmd(command, params, sout, env) != 0:
         print('It failed! Bye!')
         sys.exit(0)
@@ -79,7 +88,7 @@ def cmd_checked(command, params=[], sout=DEVNULL, env=None):
 
 class Project:
     """A class encapsulating getting and building project"""
-    # HACK
+
     pre_inst_dir = '/tmp'
 
     def __init__(self, name, url, dependencies):
@@ -100,8 +109,9 @@ class Project:
 
     def configure(self):
         params = ['--prefix={0}'.format(self.get_install_dir())]
-        for d in self.dependencies:
-            params.append('--with-{0}={1}'.format(d.name, d.get_install_dir()))
+        for dependency in self.dependencies:
+            params.append('--with-{0}={1}'.format(dependency.name,
+                                                  dependency.get_install_dir()))
         return cmd('./configure', params)
 
     def download(self):
@@ -120,9 +130,10 @@ class ProjectBuilder:
         self.projects = projects
 
     def _get_next(self):
-        for p in self.projects:
-            if not p.ready and all(d.ready for d in p.dependencies):
-                return p
+        for project in self.projects:
+            if not project.ready\
+               and all(dependency.ready for dependency in project.dependencies):
+                return project
         return None
 
     def build_all(self):
@@ -169,8 +180,8 @@ def prepare_autotools_projects(skip=False):
                      dependencies=[apr, apr_util])
 
     if not skip:
-        pBuild = ProjectBuilder([apache, apr, apr_util])
-        pBuild.build_all()
+        project_builder = ProjectBuilder([apache, apr, apr_util])
+        project_builder.build_all()
 
     return {'apache': apache}
 
@@ -234,37 +245,37 @@ def prepare_mod_cluster(work_dir, apache):
     cmd_checked('mvn', ['package', '-DskipTests'])
 
 
-if __name__ == '__main__':
+def main():
 
-    WORK_DIR = getcwd()
+    work_dir = getcwd()
 
-    PKGS_TO_CHECK = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
+    pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
                      'autoconf', 'libtool', 'patch']
 
-    TMP_DIR = mkdtemp()
-    SKIP = False
+    tmp_dir = mkdtemp()
+    Project.pre_inst_dir = join('/', 'usr', 'local')
+    skip = False
 
     # Setting just for testing...
-    PKGS_TO_CHECK = []
-    TMP_DIR = getcwd()
-    Project.pre_inst_dir = join('/', 'tmp', 'usr', 'local')
-    #SKIP = True
+    # pkgs_to_check = []
+    # tmp_dir = getcwd()
+    # skip = True
 
-    install_pkgs(PKGS_TO_CHECK)
+    install_pkgs(pkgs_to_check)
 
-    print("Changing to {0}".format(TMP_DIR))
-    chdir(TMP_DIR)
+    print("Changing to {0}".format(tmp_dir))
+    chdir(tmp_dir)
 
     cmd('killall', ['java', 'httpd'])
 
-    PROJECTS = prepare_autotools_projects(SKIP)
-    chdir(TMP_DIR)
-    prepare_mod_cluster(WORK_DIR, PROJECTS['apache'])
+    projects = prepare_autotools_projects(skip)
+    chdir(tmp_dir)
+    prepare_mod_cluster(work_dir, projects['apache'])
 
     # Update apache config file
-    conf_path = join(PROJECTS['apache'].get_install_dir(),
+    conf_path = join(projects['apache'].get_install_dir(),
                      'conf', 'httpd.conf')
-    patch_file(conf_path, join(WORK_DIR, 'diffs', 'httpd_patch.diff'))
+    patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
 
     # Get and build jboss logging
     chdir(pardir)
@@ -313,7 +324,7 @@ if __name__ == '__main__':
     ip_address = get_ip4_address()
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(WORK_DIR, 'diffs', 'tomcat1_patch.diff'),
+               join(work_dir, 'diffs', 'tomcat1_patch.diff'),
                template=[ip_address, 'tomcat1'])
 
     apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
@@ -322,7 +333,7 @@ if __name__ == '__main__':
     cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(WORK_DIR, 'diffs', 'tomcat2_patch.diff'),
+               join(work_dir, 'diffs', 'tomcat2_patch.diff'),
                template=[ip_address, 'tomcat1', 'tomcat2'])
 
     apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
@@ -346,82 +357,84 @@ if __name__ == '__main__':
     cmd('setenforce', ['0'])
 
     # (re)Start apache
-    cmd_checked(join(PROJECTS['apache'].get_install_dir(),
+    cmd_checked(join(projects['apache'].get_install_dir(),
                      'bin', 'apachectl'), ['start'])
 
-    APACHE1_TOMCAT_PID_PATH = join(apache_tomcat_inst_dir_1, 'pids', 'pid')
-    APACHE2_TOMCAT_PID_PATH = join(apache_tomcat_inst_dir_2, 'pids', 'pid')
+    apache1_tomcat_pid_path = join(apache_tomcat_inst_dir_1, 'pids', 'pid')
+    apache2_tomcat_pid_path = join(apache_tomcat_inst_dir_2, 'pids', 'pid')
 
-    if not exists(dirname(APACHE1_TOMCAT_PID_PATH)):
-        makedirs(dirname(APACHE1_TOMCAT_PID_PATH))
-    if not exists(dirname(APACHE2_TOMCAT_PID_PATH)):
-        makedirs(dirname(APACHE2_TOMCAT_PID_PATH))
+    if not exists(dirname(apache1_tomcat_pid_path)):
+        makedirs(dirname(apache1_tomcat_pid_path))
+    if not exists(dirname(apache2_tomcat_pid_path)):
+        makedirs(dirname(apache2_tomcat_pid_path))
 
-    touch(APACHE1_TOMCAT_PID_PATH)
-    touch(APACHE2_TOMCAT_PID_PATH)
+    touch(apache1_tomcat_pid_path)
+    touch(apache2_tomcat_pid_path)
 
     # Start tomcat
     cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'),
                 ['start'],
-                env={**dict(os.environ), 'CATALINA_PID': APACHE1_TOMCAT_PID_PATH})
+                env={**dict(environ), 'CATALINA_PID': apache1_tomcat_pid_path})
     cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
                 ['start'],
-                env={**dict(os.environ), 'CATALINA_PID': APACHE2_TOMCAT_PID_PATH})
+                env={**dict(environ), 'CATALINA_PID': apache2_tomcat_pid_path})
 
-
-    def get_jvm_route(f):
-        data = f.read().decode('utf-8')
-        fields = {}
+    def get_jvm_route(fdesc):
+        data = fdesc.read().decode('utf-8')
         for line in data.split('\n'):
             idx = line.find(':')
             if idx != -1 and line[:idx].strip() == 'JVM route':
                 return line[idx+1:].strip()
         return None
 
-
-    CLUSTERBENCH_URL = 'http://{0}:6666/clusterbench/requestinfo'\
+    clusterbench_url = 'http://{0}:6666/clusterbench/requestinfo'\
                        .format(ip_address)
     # Use session cookie
     opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
     install_opener(opener)
-    
-    req = Request(url=CLUSTERBENCH_URL)
 
-    TIMEOUT = 120
-    # Be sure that server is up    
-    for i in range(TIMEOUT):
-        #with urlopen(req) as f:
+    req = Request(url=clusterbench_url)
+
+    timeout = 120
+    # Be sure that server is up
+    for seconds in range(timeout):
         try:
-            f = urlopen(req)
-            if f.getcode() == 200:
-                jvm_route = get_jvm_route(f)
-                f.close()
+            fdesc = urlopen(req)
+            if fdesc.getcode() == 200:
+                jvm_route = get_jvm_route(fdesc)
+                fdesc.close()
                 break
-        except HTTPError as e:
+        except HTTPError as excpt:
             sleep(1)
-            print('Waiting for server...{0} - {1}'.format(TIMEOUT-i, e.code))
+            print('Waiting for server...{0} - {1}'.format(timeout-seconds, excpt.code))
     else:
         assert False, "Server is not up."
 
-    for i in range(5):
-        with urlopen(req) as f:
-            assert f.getcode() == 200
+    for _ in range(5):
+        with urlopen(req) as fdesc:
+            assert fdesc.getcode() == 200
             # session cookies do work
-            assert get_jvm_route(f) == jvm_route
+            assert get_jvm_route(fdesc) == jvm_route
 
     # kill tomcat
     if jvm_route == 'tomcat1':
-        fname = APACHE1_TOMCAT_PID_PATH
+        fname = apache1_tomcat_pid_path
         exp_jvm_route = 'tomcat2'
     else:
-        fname = APACHE2_TOMCAT_PID_PATH
+        fname = apache2_tomcat_pid_path
         exp_jvm_route = 'tomcat1'
 
-    with open(fname, 'r') as f:
-        pid = int(f.read())
+    with open(fname, 'r') as fdesc:
+        pid = int(fdesc.read())
         kill(pid, SIGKILL)
 
     # check that new tomcat is used
-    with urlopen(req) as f:
-        assert f.getcode() == 200
-        assert get_jvm_route(f) == exp_jvm_route
+    with urlopen(req) as fdesc:
+        assert fdesc.getcode() == 200
+        assert get_jvm_route(fdesc) == exp_jvm_route
+
+    print('All green!')
+
+
+if __name__ == '__main__':
+    main()
