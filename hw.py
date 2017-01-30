@@ -2,8 +2,9 @@
 
 # todo env
 
+import sys
+import os
 from glob import glob
-from sys import exit
 from subprocess import call, check_output
 from tempfile import mkdtemp, NamedTemporaryFile
 from os import chdir, getcwd, makedirs
@@ -26,10 +27,10 @@ class Connection:
         self.path = path
         self.sc = None
 
-
     def send_req_get_body(self):
         addr = self.server, self.port
-        req = "GET {0} HTTP/1.1\r\nHost: {1}\r\n".format(self.path, self.server)
+        req = "GET {0} HTTP/1.1\r\nHost: {1}\r\n".format(self.path,
+                                                         self.server)
 
         if self.sc:
             req = req + 'Cookie: {0}\r\n'.format(self.sc)
@@ -46,10 +47,10 @@ class Connection:
         body = []
 
         for line in resp.split('\n'):
-            if line == '\r': # End of headers
+            if line == '\r':  # End of headers
                 headers = False
             if headers:
-               if line.find(':') != -1:
+                if line.find(':') != -1:
                     tmp = line.split(':')
                     name, value = tmp[0], tmp[1]
                     if name.lower() == 'set-cookie' and\
@@ -60,7 +61,7 @@ class Connection:
         return body
 
 
-def patch_file(path_to_file, patch_name, format = []):
+def patch_file(path_to_file, patch_name, format=[]):
     with open(patch_name, 'r') as patch_file:
         patch_text = patch_file.read()
         # Patch may need to fill into templates
@@ -70,13 +71,13 @@ def patch_file(path_to_file, patch_name, format = []):
     with NamedTemporaryFile('w') as tmp_file:
         tmp_file.write(patch_text)
         tmp_file.flush()
-                
+
         cmd('patch', [path_to_file, tmp_file.name], sout=None)
 
 
 # Some wrappers
 def get_ip4_address():
-    command=r"""ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/'"""
+    command = r"""ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/'"""
     output = check_output(command, shell=True).decode('UTF-8')
     if output and output[-1] == '\n':
         output = output[:-1]
@@ -109,7 +110,7 @@ def cmd(command, params=[], sout=DEVNULL):
 def cmd_checked(command, params=[], sout=DEVNULL):
     if cmd(command, params, sout) != 0:
         print('It failed! Bye!')
-        exit(0)
+        sys.exit(0)
 
 
 class Project:
@@ -198,10 +199,10 @@ def prepare_autotools_projects(skip=False):
                   url='http://apache.miloslavbrada.cz/apr/apr-1.5.2.tar.bz2',
                   dependencies=[])
     apr_util = Project(name='apr-util',
-                       url='http://apache.miloslavbrada.cz/apr/apr-util-1.5.4.tar.bz2',
+                       url='http://apache.miloslavbrada.cz/apr/apr-util-1.5.4.tar.bz2',  # noqa
                        dependencies=[apr])
     apache = Project(name='apache',
-                     url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',
+                     url='http://apache.miloslavbrada.cz/httpd/httpd-2.4.25.tar.bz2',  # noqa
                      dependencies=[apr, apr_util])
 
     if not skip:
@@ -222,31 +223,37 @@ def prepare_mod_cluster(work_dir, apache):
 
     # Patching mod_cluster version to show apache banner
     # chdir('mod_manager')
-    patch_file(join('mod_manager','mod_manager.c'),
+    patch_file(join('mod_manager', 'mod_manager.c'),
                join(work_dir, 'diffs', 'banner_patch.diff'))
     # chdir(pardir)
 
     # build & install
-    for mod in ['mod_proxy_cluster', 'mod_manager', 'mod_cluster_slotmem', 'advertise']:
+    for mod in ['mod_proxy_cluster',
+                'mod_manager',
+                'mod_cluster_slotmem',
+                'advertise']:
         print('Building mod: {0}'.format(mod))
         chdir(mod)
         cmd_checked('./buildconf')
         cmd_checked('./configure',
-                    ['--with-apxs={0}'.format(join(apache.get_install_dir(), 'bin', 'apxs'))])
+                    ['--with-apxs={0}'.format(join(apache.get_install_dir(),
+                                                   'bin', 'apxs'))])
         cmd_checked('make')
         cmd_checked('libtool',
                     ['--finish', join(apache.get_install_dir(), 'modules')])
 
         # `make install' does nothing; do `cp' instead
-        cmd_checked('cp', glob('*.so') + [join(apache.get_install_dir(), 'modules')])
+        cmd_checked('cp',
+                    glob('*.so') + [join(apache.get_install_dir(), 'modules')])
         chdir(pardir)
 
     # Get mod_cluster config file
-    url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'
+    url = 'https://gist.githubusercontent.com/Karm/85cf36a52a8c203accce/raw/a41ecc90fea1f2b3bb880e79fa67fb6c7f61cf68/mod_cluster.conf'  # noqa
     # Don't get the file again if it's already around
     if not exists(basename(url)):
         cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
-    extra_conf_path = join(apache.get_install_dir(), 'conf', 'extra', basename(url))
+    extra_conf_path = join(apache.get_install_dir(),
+                           'conf', 'extra', basename(url))
     cmd_checked('cp', [basename(url), extra_conf_path])
 
     # Update mod_cluster config file
@@ -255,11 +262,11 @@ def prepare_mod_cluster(work_dir, apache):
         makedirs(cache_dir)
     cmd_checked('sed',
                 ['-i',
-                 's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'
+                 's@MemManagerFile /opt/DU/httpd-build/cache/mod_cluster@MemManagerFile {0}@'  # noqa
                  .format(join(cache_dir, 'mod_cluster')),
                  extra_conf_path])
 
-    # Move from mod_cluster/native  to mod_cluster and build it's java libraries
+    # Move from mod_cluster/native to mod_cluster and build it's java libraries
     chdir(pardir)
     cmd_checked('mvn', ['package', '-DskipTests'])
 
@@ -268,18 +275,17 @@ if __name__ == '__main__':
 
     work_dir = getcwd()
 
-    if False:
-        pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git','maven',
-                         'autoconf', 'libtool', 'patch']
+    pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
+                     'autoconf', 'libtool', 'patch']
 
-        tmp_dir = mkdtemp()
-        skip=False
-    else:
-        # Setting just for testing...
-        pkgs_to_check = []
-        tmp_dir = getcwd()
-        Project.pre_inst_dir = '/tmp/usr/local/'
-        skip=True
+    tmp_dir = mkdtemp()
+    skip = False
+
+    # Setting just for testing...
+    pkgs_to_check = []
+    tmp_dir = getcwd()
+    Project.pre_inst_dir = join('/', 'tmp', 'usr', 'local')
+    skip = True
 
     install_pkgs(pkgs_to_check)
 
@@ -292,7 +298,8 @@ if __name__ == '__main__':
     prepare_mod_cluster(work_dir, projects['apache'])
 
     # Update apache config file
-    conf_path = join(projects['apache'].get_install_dir(), 'conf', 'httpd.conf')
+    conf_path = join(projects['apache'].get_install_dir(),
+                     'conf', 'httpd.conf')
     patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
 
     # Get and build jboss logging
@@ -312,7 +319,7 @@ if __name__ == '__main__':
     chdir(pardir)
 
     # Get and unpack tomcat
-    turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'
+    turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'  # noqa
     if not exists(basename(turl)):
         cmd('wget', ['--quiet', turl])
     cmd('tar', ['xzf', basename(turl)])
@@ -320,16 +327,23 @@ if __name__ == '__main__':
 
     # Install mod_cluster and jboss logging into tomcat
     cmd_checked('cp', [
-        join('mod_cluster','container','tomcat8','target','mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster','container','catalina-standalone','target','mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster','container','catalina','target','mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster','core','target','mod_cluster-core-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster','container-spi','target','mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar'),
-        join('jboss-logging','target','jboss-logging-3.3.1.Final-SNAPSHOT.jar'),
+        join('mod_cluster', 'container', 'tomcat8', 'target',
+             'mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster', 'container', 'catalina-standalone', 'target',
+             'mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar'),  # noqa
+        join('mod_cluster', 'container', 'catalina', 'target',
+             'mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster', 'core', 'target',
+             'mod_cluster-core-1.3.6.Final-SNAPSHOT.jar'),
+        join('mod_cluster', 'container-spi', 'target',
+             'mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar'),
+        join('jboss-logging', 'target',
+             'jboss-logging-3.3.1.Final-SNAPSHOT.jar'),
         join(tomcat_dir, 'lib')])
 
     # Install clusterbench into tomcat
-    cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web','target','clusterbench.war'),
+    cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web',
+                            'target', 'clusterbench.war'),
                        join(tomcat_dir, 'webapps')])
 
     ip_address = get_ip4_address()
@@ -338,7 +352,7 @@ if __name__ == '__main__':
                join(work_dir, 'diffs', 'tomcat1_patch.diff'),
                format=[ip_address])
 
-    apache_tomcat_inst_dir_1 =  join(Project.pre_inst_dir, tomcat_dir)
+    apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
 
     # Copy tomcat to the same directory as apache
     cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
@@ -347,8 +361,7 @@ if __name__ == '__main__':
                join(work_dir, 'diffs', 'tomcat2_patch.diff'),
                format=[ip_address])
 
-    
-    apache_tomcat_inst_dir_2 =  join(Project.pre_inst_dir, 'at2')
+    apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
     if not exists(apache_tomcat_inst_dir_2):
         makedirs(apache_tomcat_inst_dir_2)
 
@@ -366,15 +379,22 @@ if __name__ == '__main__':
     cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
     cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
+    cmd('setenforce', ['0'])
+    
     # (re)Start apache
     cmd_checked(join(projects['apache'].get_install_dir(),
-                     'bin', 'apachectl'), ['restart'])
+                     'bin', 'apachectl'), ['start'])
+
+    # join(apache_tomcat_inst_dir_1, 'pids', 'pid')
+    # if not exists(basename(url)):
+    #     cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
+
 
     # Start tomcat
-    cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'), ['start'])
-    cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'), ['start'])
-
-
+    cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'),
+                ['start'])
+    cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
+                ['start'])
 
 # # HACK
 
@@ -401,7 +421,7 @@ if __name__ == '__main__':
 #                 if route == None:
 #                     route = tmp
 #                 elif route != tmp:
-#                     print('Unexpected route!')    
+#                     print('Unexpected route!')
 #                     exit(1)
 
 
