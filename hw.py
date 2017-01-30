@@ -8,13 +8,12 @@ from glob import glob
 from subprocess import call, check_output
 from tempfile import mkdtemp, NamedTemporaryFile
 from os import chdir, getcwd, makedirs
-from os.path import basename, splitext, join, isfile, pardir, exists
+from os.path import basename, splitext, join, isfile, pardir, exists, dirname
 from socket import socket
 
 try:
     from subprocess import DEVNULL  # py3k
 except ImportError:
-    import os
     DEVNULL = open(os.devnull, 'wb')
 
 
@@ -61,18 +60,25 @@ class Connection:
         return body
 
 
-def patch_file(path_to_file, patch_name, format=[]):
-    with open(patch_name, 'r') as patch_file:
-        patch_text = patch_file.read()
+def touch(fname):
+    if exists(fname):
+        os.utime(fname, None)
+    else:
+        open(fname, 'a').close()
+
+
+def patch_file(file_to_patch, patch_name, template=[]):
+    with open(patch_name, 'r') as diff_file:
+        diff_text = diff_file.read()
         # Patch may need to fill into templates
-        if format:
-            patch_text = patch_text.format(*format)
+        if template:
+            diff_text = diff_text.format(*template)
 
     with NamedTemporaryFile('w') as tmp_file:
-        tmp_file.write(patch_text)
+        tmp_file.write(diff_text)
         tmp_file.flush()
 
-        cmd('patch', [path_to_file, tmp_file.name], sout=None)
+        cmd('patch', [file_to_patch, tmp_file.name], sout=None)
 
 
 # Some wrappers
@@ -99,16 +105,16 @@ def pkg_install(pkg):
     return False
 
 
-def cmd(command, params=[], sout=DEVNULL):
+def cmd(command, params=[], sout=DEVNULL, env=None):
     print('{0} {1}'.format(command, ' '.join(params)))
-    ret = call([command] + params, stdout=sout)
+    ret = call([command] + params, stdout=sout, env=env)
     if ret != 0:
         print('Returned [{0}]'.format(ret))
     return ret
 
 
-def cmd_checked(command, params=[], sout=DEVNULL):
-    if cmd(command, params, sout) != 0:
+def cmd_checked(command, params=[], sout=DEVNULL, env=None):
+    if cmd(command, params, sout, env) != 0:
         print('It failed! Bye!')
         sys.exit(0)
 
@@ -161,20 +167,19 @@ class ProjectBuilder:
                 return p
         return None
 
-    def _build_proj(self, proj):
-        if not isfile(proj.get_arch_name()):
-            proj.download()
-        proj.unpack()
-        chdir(proj.get_unpack_dir())
-        proj.configure()
-        cmd_checked('make')
-        cmd_checked('make', ['install'])
-        chdir(tmp_dir)
-
     def build_all(self):
+        def build_proj(proj):
+            if not isfile(proj.get_arch_name()):
+                proj.download()
+            proj.unpack()
+            chdir(proj.get_unpack_dir())
+            proj.configure()
+            cmd_checked('make')
+            cmd_checked('make', ['install'])
+
         proj = self._get_next()
         while proj:
-            self._build_proj(proj)
+            build_proj(proj)
             proj.ready = True
             proj = self._get_next()
 
@@ -273,34 +278,35 @@ def prepare_mod_cluster(work_dir, apache):
 
 if __name__ == '__main__':
 
-    work_dir = getcwd()
+    WORK_DIR = getcwd()
 
-    pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
+    PKGS_TO_CHECK = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
                      'autoconf', 'libtool', 'patch']
 
-    tmp_dir = mkdtemp()
-    skip = False
+    TMP_DIR = mkdtemp()
+    SKIP = False
 
     # Setting just for testing...
-    pkgs_to_check = []
-    tmp_dir = getcwd()
+    PKGS_TO_CHECK = []
+    TMP_DIR = getcwd()
     Project.pre_inst_dir = join('/', 'tmp', 'usr', 'local')
-    skip = True
+    SKIP = True
 
-    install_pkgs(pkgs_to_check)
+    install_pkgs(PKGS_TO_CHECK)
 
-    print("Changing to {0}".format(tmp_dir))
-    chdir(tmp_dir)
+    print("Changing to {0}".format(TMP_DIR))
+    chdir(TMP_DIR)
 
     cmd('killall', ['java', 'httpd'])
 
-    projects = prepare_autotools_projects(skip)
-    prepare_mod_cluster(work_dir, projects['apache'])
+    PROJECTS = prepare_autotools_projects(SKIP)
+    chdir(TMP_DIR)
+    prepare_mod_cluster(WORK_DIR, PROJECTS['apache'])
 
     # Update apache config file
-    conf_path = join(projects['apache'].get_install_dir(),
+    conf_path = join(PROJECTS['apache'].get_install_dir(),
                      'conf', 'httpd.conf')
-    patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
+    patch_file(conf_path, join(WORK_DIR, 'diffs', 'httpd_patch.diff'))
 
     # Get and build jboss logging
     chdir(pardir)
@@ -349,8 +355,8 @@ if __name__ == '__main__':
     ip_address = get_ip4_address()
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(work_dir, 'diffs', 'tomcat1_patch.diff'),
-               format=[ip_address])
+               join(WORK_DIR, 'diffs', 'tomcat1_patch.diff'),
+               template=[ip_address])
 
     apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
 
@@ -358,8 +364,8 @@ if __name__ == '__main__':
     cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(work_dir, 'diffs', 'tomcat2_patch.diff'),
-               format=[ip_address])
+               join(WORK_DIR, 'diffs', 'tomcat2_patch.diff'),
+               template=[ip_address])
 
     apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
     if not exists(apache_tomcat_inst_dir_2):
@@ -380,22 +386,29 @@ if __name__ == '__main__':
     cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
     cmd('setenforce', ['0'])
-    
+
     # (re)Start apache
-    cmd_checked(join(projects['apache'].get_install_dir(),
+    cmd_checked(join(PROJECTS['apache'].get_install_dir(),
                      'bin', 'apachectl'), ['start'])
 
-    # join(apache_tomcat_inst_dir_1, 'pids', 'pid')
-    # if not exists(basename(url)):
-    #     cmd_checked('wget', ['--quiet', url, '-O', basename(url)])
+    APACHE1_TOMCAT_PID_PATH = join(apache_tomcat_inst_dir_1, 'pids', 'pid')
+    APACHE2_TOMCAT_PID_PATH = join(apache_tomcat_inst_dir_2, 'pids', 'pid')
 
+    if not exists(dirname(APACHE1_TOMCAT_PID_PATH)):
+        makedirs(dirname(APACHE1_TOMCAT_PID_PATH))
+    if not exists(dirname(APACHE2_TOMCAT_PID_PATH)):
+        makedirs(dirname(APACHE2_TOMCAT_PID_PATH))
+
+    touch(APACHE1_TOMCAT_PID_PATH)
+    touch(APACHE2_TOMCAT_PID_PATH)
 
     # Start tomcat
     cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'),
-                ['start'])
+                ['start'],
+                env={**dict(os.environ), 'CATALINA_PID': APACHE1_TOMCAT_PID_PATH})
     cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
-                ['start'])
-
+                ['start'],
+                env={**dict(os.environ), 'CATALINA_PID': APACHE2_TOMCAT_PID_PATH})
 # # HACK
 
 # opts = {
