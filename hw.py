@@ -4,60 +4,18 @@
 
 import sys
 import os
-from glob import glob
-from subprocess import call, check_output
-from tempfile import mkdtemp, NamedTemporaryFile
-from os import chdir, getcwd, makedirs
+import http.cookiejar
+from os import chdir, getcwd, makedirs, kill
 from os.path import basename, splitext, join, isfile, pardir, exists, dirname
+from glob import glob
+from subprocess import call, check_output, DEVNULL
+from tempfile import mkdtemp, NamedTemporaryFile
 from socket import socket
-
-try:
-    from subprocess import DEVNULL  # py3k
-except ImportError:
-    DEVNULL = open(os.devnull, 'wb')
-
-
-class Connection:
-    """A simple connection class"""
-
-    def __init__(self, server, port, path):
-        self.server = server
-        self.port = port
-        self.path = path
-        self.sc = None
-
-    def send_req_get_body(self):
-        addr = self.server, self.port
-        req = "GET {0} HTTP/1.1\r\nHost: {1}\r\n".format(self.path,
-                                                         self.server)
-
-        if self.sc:
-            req = req + 'Cookie: {0}\r\n'.format(self.sc)
-
-        req = req + '\r\n'
-
-        s = socket()
-        r = s.connect(addr)
-        req_len = s.send(req.encode())
-
-        resp = s.recv(4096).decode()
-
-        headers = True
-        body = []
-
-        for line in resp.split('\n'):
-            if line == '\r':  # End of headers
-                headers = False
-            if headers:
-                if line.find(':') != -1:
-                    tmp = line.split(':')
-                    name, value = tmp[0], tmp[1]
-                    if name.lower() == 'set-cookie' and\
-                       value.lower().find('expires=') == -1:
-                        self.sc = value
-            else:
-                body.append(line)
-        return body
+from signal import SIGKILL
+from urllib.request import (urlopen, build_opener, install_opener,
+                            HTTPCookieProcessor, Request)
+from time import sleep
+from urllib.error import HTTPError
 
 
 def touch(fname):
@@ -290,7 +248,7 @@ if __name__ == '__main__':
     PKGS_TO_CHECK = []
     TMP_DIR = getcwd()
     Project.pre_inst_dir = join('/', 'tmp', 'usr', 'local')
-    SKIP = True
+    #SKIP = True
 
     install_pkgs(PKGS_TO_CHECK)
 
@@ -356,7 +314,7 @@ if __name__ == '__main__':
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
                join(WORK_DIR, 'diffs', 'tomcat1_patch.diff'),
-               template=[ip_address])
+               template=[ip_address, 'tomcat1'])
 
     apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
 
@@ -365,7 +323,7 @@ if __name__ == '__main__':
 
     patch_file(join(tomcat_dir, 'conf', 'server.xml'),
                join(WORK_DIR, 'diffs', 'tomcat2_patch.diff'),
-               template=[ip_address])
+               template=[ip_address, 'tomcat1', 'tomcat2'])
 
     apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
     if not exists(apache_tomcat_inst_dir_2):
@@ -409,39 +367,61 @@ if __name__ == '__main__':
     cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
                 ['start'],
                 env={**dict(os.environ), 'CATALINA_PID': APACHE2_TOMCAT_PID_PATH})
-# # HACK
-
-# opts = {
-#     'url': 'http://{0}:6666/clusterbench/requestinfo'.format(get_ip4_address()),
-#     'req_num': 10,
-#     'print-response': True,
-#     'print-request': False,
-#     }
-# conn = Connection(server=get_ip4_address(),
-#                   port=6666,
-#                   path='/clusterbench/requestinfo')
-
-# route = None
-# # Route is same for all the requests
-# for i in range(10):
-#     body = conn.send_req_get_body()
-
-#     for line in body:
-#         if line.find(':') != -1:
-#             p = 'JVM route: '
-#             if len(line) > len(p) and line[:len(p)] == p:
-#                 tmp = line[len(p):]
-#                 if route == None:
-#                     route = tmp
-#                 elif route != tmp:
-#                     print('Unexpected route!')
-#                     exit(1)
 
 
+    def get_jvm_route(f):
+        data = f.read().decode('utf-8')
+        fields = {}
+        for line in data.split('\n'):
+            idx = line.find(':')
+            if idx != -1 and line[:idx].strip() == 'JVM route':
+                return line[idx+1:].strip()
+        return None
 
-# #exit(0)
-# # in progress - ignore
-# import subprocess
-# pl = subprocess.Popen(['ps', '-a', '-u', '-x'], stdout=subprocess.PIPE).communicate()[0]
-# print(pl)
-# exit(1)
+
+    CLUSTERBENCH_URL = 'http://{0}:6666/clusterbench/requestinfo'\
+                       .format(ip_address)
+    # Use session cookie
+    opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    install_opener(opener)
+    
+    req = Request(url=CLUSTERBENCH_URL)
+
+    TIMEOUT = 120
+    # Be sure that server is up    
+    for i in range(TIMEOUT):
+        #with urlopen(req) as f:
+        try:
+            f = urlopen(req)
+            if f.getcode() == 200:
+                jvm_route = get_jvm_route(f)
+                f.close()
+                break
+        except HTTPError as e:
+            sleep(1)
+            print('Waiting for server...{0} - {1}'.format(TIMEOUT-i, e.code))
+    else:
+        assert False, "Server is not up."
+
+    for i in range(5):
+        with urlopen(req) as f:
+            assert f.getcode() == 200
+            # session cookies do work
+            assert get_jvm_route(f) == jvm_route
+
+    # kill tomcat
+    if jvm_route == 'tomcat1':
+        fname = APACHE1_TOMCAT_PID_PATH
+        exp_jvm_route = 'tomcat2'
+    else:
+        fname = APACHE2_TOMCAT_PID_PATH
+        exp_jvm_route = 'tomcat1'
+
+    with open(fname, 'r') as f:
+        pid = int(f.read())
+        kill(pid, SIGKILL)
+
+    # check that new tomcat is used
+    with urlopen(req) as f:
+        assert f.getcode() == 200
+        assert get_jvm_route(f) == exp_jvm_route

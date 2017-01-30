@@ -10,4 +10,4 @@
 105c109
 <     <Engine name="Catalina" defaultHost="localhost">
 ---
->     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+>     <Engine name="Catalina" defaultHost="localhost" jvmRoute="{1}">

@@ -11,6 +11,6 @@
 ---
 >     <Connector port="8010" protocol="AJP/1.3" redirectPort="8443" address="{0}"/>
 109c109
-<     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat1">
+<     <Engine name="Catalina" defaultHost="localhost" jvmRoute="{1}">
 ---
->     <Engine name="Catalina" defaultHost="localhost" jvmRoute="tomcat2">
+>     <Engine name="Catalina" defaultHost="localhost" jvmRoute="{2}">
