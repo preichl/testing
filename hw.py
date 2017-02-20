@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import (urlopen, build_opener, install_opener,
                             HTTPCookieProcessor, Request)
 from time import sleep
+from shutil import rmtree
 
 
 def touch(fname):
@@ -259,7 +260,7 @@ def main():
                      'autoconf', 'libtool', 'patch', 'psmisc']
 
     tmp_dir = mkdtemp()
-    Project.pre_inst_dir = join('/', 'usr', 'local')
+    Project.pre_inst_dir = join('/', 'usr', 'local', 'tmp')
     skip = False
 
     # Setting just for testing...
@@ -441,6 +442,7 @@ def main():
         assert get_jvm_route(fdesc) == exp_jvm_route
 
     print('All green!')
+    rmtree(Project.pre_inst_dir)
 
 
 if __name__ == '__main__':
