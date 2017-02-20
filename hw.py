@@ -273,7 +273,7 @@ def main():
     print("Changing to {0}".format(tmp_dir))
     chdir(tmp_dir)
 
-    cmd('killall', ['java', 'httpd'])
+    cmd('killall', ['java', 'httpd', 'firewalld'])
 
     projects = prepare_autotools_projects(skip)
     chdir(tmp_dir)
@@ -309,18 +309,18 @@ def main():
 
     # Install mod_cluster and jboss logging into tomcat
     cmd_checked('cp', [
-        join('mod_cluster', 'container', 'tomcat8', 'target',
-             'mod_cluster-container-tomcat8-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster', 'container', 'catalina-standalone', 'target',
-             'mod_cluster-container-catalina-standalone-1.3.6.Final-SNAPSHOT.jar'),  # noqa
-        join('mod_cluster', 'container', 'catalina', 'target',
-             'mod_cluster-container-catalina-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster', 'core', 'target',
-             'mod_cluster-core-1.3.6.Final-SNAPSHOT.jar'),
-        join('mod_cluster', 'container-spi', 'target',
-             'mod_cluster-container-spi-1.3.6.Final-SNAPSHOT.jar'),
-        join('jboss-logging', 'target',
-             'jboss-logging-3.3.1.Final-SNAPSHOT.jar'),
+        glob(join('mod_cluster', 'container', 'tomcat8', 'target',
+                  'mod_cluster-container-tomcat8-*-SNAPSHOT.jar'))[0],
+        glob(join('mod_cluster', 'container', 'catalina-standalone', 'target',
+             'mod_cluster-container-catalina-standalone-*-SNAPSHOT.jar'))[0],  # noqa
+        glob(join('mod_cluster', 'container', 'catalina', 'target',
+             'mod_cluster-container-catalina-*-SNAPSHOT.jar'))[0],
+        glob(join('mod_cluster', 'core', 'target',
+             'mod_cluster-core-*-SNAPSHOT.jar'))[0],
+        glob(join('mod_cluster', 'container-spi', 'target',
+             'mod_cluster-container-spi-*-SNAPSHOT.jar'))[0],
+        glob(join('jboss-logging', 'target',
+             'jboss-logging-*-SNAPSHOT.jar'))[0],
         join(tomcat_dir, 'lib')])
 
     # Install clusterbench into tomcat
@@ -353,13 +353,13 @@ def main():
     chdir(pardir)
 
     # Set firewall - just for now
-    cmd_checked('firewall-cmd', ['--add-service=http'])
-    cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
-    cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
-    cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
-    cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
-    cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
-    cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
+    # cmd_checked('firewall-cmd', ['--add-service=http'])
+    # cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
+    # cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
+    # cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
+    # cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
+    # cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
+    # cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
     cmd('setenforce', ['0'])
 
