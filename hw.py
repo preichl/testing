@@ -12,8 +12,9 @@ from signal import SIGKILL
 from urllib.error import HTTPError
 from urllib.request import (urlopen, build_opener, install_opener,
                             HTTPCookieProcessor, Request)
-from time import sleep
+from time import sleep, strftime
 from shutil import rmtree
+from tarfile import open as tar_open
 
 
 def touch(fname):
@@ -251,6 +252,15 @@ def prepare_mod_cluster(work_dir, apache):
     cmd_checked('mvn', ['package', '-DskipTests'])
 
 
+def archive_files(packname, file_names):
+    tar_name = "{0}.tar.bz2".format(packname)
+    tar = tar_open(tar_name, "w:bz2")
+    for name in file_names:
+        tar.add(name)
+    tar.close()
+    return tar_name
+
+
 def main():
 
     cleanup = True
@@ -442,10 +452,22 @@ def main():
             assert fdesc.getcode() == 200
             assert get_jvm_route(fdesc) == exp_jvm_route
 
-        print('All green!')
     except Exception as exp:
         if input("Unexpected error - {2}; Do you want to keep: {0} and {1}, type y/n".format(tmp_dir, Project.pre_inst_dir, exp)) == 'y':
             cleanup = False
+    else:
+        apache = projects['apache']
+        files = [join(apache.get_install_dir(), 'conf'),
+                 join(apache.get_install_dir(), 'logs'),
+                 join(apache_tomcat_inst_dir_1, 'conf'),
+                 join(apache_tomcat_inst_dir_1, 'logs'),
+                 join(apache_tomcat_inst_dir_2, 'conf'),
+                 join(apache_tomcat_inst_dir_2, 'logs')]
+
+        arch_name = join('/', 'tmp', 'artefacts-' + strftime("%Y%m%d-%H%M%S"))
+        print('Generrating: ' + archive_files(arch_name, files))
+        print('All green!')
+
     finally:
         if cleanup:
             rmtree(tmp_dir)
