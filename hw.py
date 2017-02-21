@@ -465,7 +465,7 @@ def main():
                  join(apache_tomcat_inst_dir_2, 'logs')]
 
         arch_name = join('/', 'tmp', 'artefacts-' + strftime("%Y%m%d-%H%M%S"))
-        print('Generrating: ' + archive_files(arch_name, files))
+        print('Generating: ' + archive_files(arch_name, files))
         print('All green!')
 
     finally:
