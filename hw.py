@@ -1,7 +1,5 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """Test for apache-tomcat running mod_cluseter and apache as a proxy"""
-
-# todo env
 
 import sys
 import http.cookiejar
@@ -67,6 +65,7 @@ def pkg_update():
     if ret == 0:
         return True
     return False
+
 
 def pkg_install(pkg):
     ret = call(['dnf', 'install', '-y', pkg])
@@ -254,6 +253,8 @@ def prepare_mod_cluster(work_dir, apache):
 
 def main():
 
+    cleanup = True
+
     work_dir = getcwd()
 
     pkgs_to_check = ['wget', 'gcc', 'bzip2', 'pcre-devel', 'git', 'maven',
@@ -267,182 +268,188 @@ def main():
     # pkgs_to_check = []
     # tmp_dir = getcwd()
     # skip = True
+    try:
+        pkg_update()
+        install_pkgs(pkgs_to_check)
 
-    pkg_update()
-    install_pkgs(pkgs_to_check)
+        print("Changing to {0}".format(tmp_dir))
+        chdir(tmp_dir)
 
-    print("Changing to {0}".format(tmp_dir))
-    chdir(tmp_dir)
+        cmd('killall', ['java', 'httpd', 'firewalld'])
 
-    cmd('killall', ['java', 'httpd', 'firewalld'])
+        projects = prepare_autotools_projects(skip)
+        chdir(tmp_dir)
+        prepare_mod_cluster(work_dir, projects['apache'])
 
-    projects = prepare_autotools_projects(skip)
-    chdir(tmp_dir)
-    prepare_mod_cluster(work_dir, projects['apache'])
+        # Update apache config file
+        conf_path = join(projects['apache'].get_install_dir(),
+                         'conf', 'httpd.conf')
+        patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
 
-    # Update apache config file
-    conf_path = join(projects['apache'].get_install_dir(),
-                     'conf', 'httpd.conf')
-    patch_file(conf_path, join(work_dir, 'diffs', 'httpd_patch.diff'))
+        # Get and build jboss logging
+        chdir(pardir)
+        cmd('git', ['clone', 'https://github.com/jboss-logging/jboss-logging.git'])
+        chdir('jboss-logging')
+        cmd_checked('mvn', ['package', '-DskipTests'])
 
-    # Get and build jboss logging
-    chdir(pardir)
-    cmd('git', ['clone', 'https://github.com/jboss-logging/jboss-logging.git'])
-    chdir('jboss-logging')
-    cmd_checked('mvn', ['package', '-DskipTests'])
+        chdir(pardir)
 
-    chdir(pardir)
+        # Get and build clusterbench
+        cmd('git', ['clone', 'https://github.com/Karm/clusterbench.git'])
+        chdir('clusterbench')
+        cmd('git', ['checkout', 'origin/simplified-and-pure', '-b', 'sp'])
+        cmd('mvn', ['clean', 'install', '-Pee6', '-DskipTests'])
 
-    # Get and build clusterbench
-    cmd('git', ['clone', 'https://github.com/Karm/clusterbench.git'])
-    chdir('clusterbench')
-    cmd('git', ['checkout', 'origin/simplified-and-pure', '-b', 'sp'])
-    cmd('mvn', ['clean', 'install', '-Pee6', '-DskipTests'])
+        chdir(pardir)
 
-    chdir(pardir)
+        # Get and unpack tomcat
+        turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'  # noqa
+        if not exists(basename(turl)):
+            cmd('wget', ['--quiet', turl])
+            cmd('tar', ['xzf', basename(turl)])
+            tomcat_dir = splitext(splitext(basename(turl))[0])[0]
 
-    # Get and unpack tomcat
-    turl = 'https://archive.apache.org/dist/tomcat/tomcat-7/v7.0.73/bin/apache-tomcat-7.0.73.tar.gz'  # noqa
-    if not exists(basename(turl)):
-        cmd('wget', ['--quiet', turl])
-    cmd('tar', ['xzf', basename(turl)])
-    tomcat_dir = splitext(splitext(basename(turl))[0])[0]
+        # Install mod_cluster and jboss logging into tomcat
+        cmd_checked('cp', [
+            glob(join('mod_cluster', 'container', 'tomcat8', 'target',
+                      'mod_cluster-container-tomcat8-*-SNAPSHOT.jar'))[0],
+            glob(join('mod_cluster', 'container', 'catalina-standalone', 'target',
+                      'mod_cluster-container-catalina-standalone-*-SNAPSHOT.jar'))[0],  # noqa
+            glob(join('mod_cluster', 'container', 'catalina', 'target',
+                      'mod_cluster-container-catalina-*-SNAPSHOT.jar'))[0],
+            glob(join('mod_cluster', 'core', 'target',
+                      'mod_cluster-core-*-SNAPSHOT.jar'))[0],
+            glob(join('mod_cluster', 'container-spi', 'target',
+                      'mod_cluster-container-spi-*-SNAPSHOT.jar'))[0],
+            glob(join('jboss-logging', 'target',
+                      'jboss-logging-*-SNAPSHOT.jar'))[0],
+            join(tomcat_dir, 'lib')])
 
-    # Install mod_cluster and jboss logging into tomcat
-    cmd_checked('cp', [
-        glob(join('mod_cluster', 'container', 'tomcat8', 'target',
-                  'mod_cluster-container-tomcat8-*-SNAPSHOT.jar'))[0],
-        glob(join('mod_cluster', 'container', 'catalina-standalone', 'target',
-             'mod_cluster-container-catalina-standalone-*-SNAPSHOT.jar'))[0],  # noqa
-        glob(join('mod_cluster', 'container', 'catalina', 'target',
-             'mod_cluster-container-catalina-*-SNAPSHOT.jar'))[0],
-        glob(join('mod_cluster', 'core', 'target',
-             'mod_cluster-core-*-SNAPSHOT.jar'))[0],
-        glob(join('mod_cluster', 'container-spi', 'target',
-             'mod_cluster-container-spi-*-SNAPSHOT.jar'))[0],
-        glob(join('jboss-logging', 'target',
-             'jboss-logging-*-SNAPSHOT.jar'))[0],
-        join(tomcat_dir, 'lib')])
+        # Install clusterbench into tomcat
+        cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web',
+                                'target', 'clusterbench.war'),
+                           join(tomcat_dir, 'webapps')])
 
-    # Install clusterbench into tomcat
-    cmd_checked('cp', [join('clusterbench', 'clusterbench-ee6-web',
-                            'target', 'clusterbench.war'),
-                       join(tomcat_dir, 'webapps')])
+        ip_address = get_ip4_address()
 
-    ip_address = get_ip4_address()
+        patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+                   join(work_dir, 'diffs', 'tomcat1_patch.diff'),
+                   template=[ip_address, 'tomcat1'])
 
-    patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(work_dir, 'diffs', 'tomcat1_patch.diff'),
-               template=[ip_address, 'tomcat1'])
+        apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
 
-    apache_tomcat_inst_dir_1 = join(Project.pre_inst_dir, tomcat_dir)
+        # Copy tomcat to the same directory as apache
+        cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
 
-    # Copy tomcat to the same directory as apache
-    cmd('cp', ['-r', tomcat_dir, Project.pre_inst_dir])
+        patch_file(join(tomcat_dir, 'conf', 'server.xml'),
+                   join(work_dir, 'diffs', 'tomcat2_patch.diff'),
+                   template=[ip_address, 'tomcat1', 'tomcat2'])
 
-    patch_file(join(tomcat_dir, 'conf', 'server.xml'),
-               join(work_dir, 'diffs', 'tomcat2_patch.diff'),
-               template=[ip_address, 'tomcat1', 'tomcat2'])
+        apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
+        if not exists(apache_tomcat_inst_dir_2):
+            makedirs(apache_tomcat_inst_dir_2)
 
-    apache_tomcat_inst_dir_2 = join(Project.pre_inst_dir, 'at2')
-    if not exists(apache_tomcat_inst_dir_2):
-        makedirs(apache_tomcat_inst_dir_2)
+        # Copy 2nd tomcat to the same directory as apache
+        chdir(tomcat_dir)
+        cmd('cp', ['-r'] + glob('*') + [apache_tomcat_inst_dir_2])
+        chdir(pardir)
 
-    # Copy 2nd tomcat to the same directory as apache
-    chdir(tomcat_dir)
-    cmd('cp', ['-r'] + glob('*') + [apache_tomcat_inst_dir_2])
-    chdir(pardir)
+        # Set firewall - just for now
+        # cmd_checked('firewall-cmd', ['--add-service=http'])
+        # cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
+        # cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
+        # cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
+        # cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
+        # cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
+        # cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
 
-    # Set firewall - just for now
-    # cmd_checked('firewall-cmd', ['--add-service=http'])
-    # cmd_checked('firewall-cmd', ['--add-port=6666/tcp'])
-    # cmd_checked('firewall-cmd', ['--add-port=8009/tcp'])
-    # cmd_checked('firewall-cmd', ['--add-port=8080/tcp'])
-    # cmd_checked('firewall-cmd', ['--add-port=8081/tcp'])
-    # cmd_checked('firewall-cmd', ['--add-port=23364/tcp'])
-    # cmd_checked('firewall-cmd', ['--add-port=23364/udp'])
+        cmd('setenforce', ['0'])
 
-    cmd('setenforce', ['0'])
+        # (re)Start apache
+        cmd_checked(join(projects['apache'].get_install_dir(),
+                         'bin', 'apachectl'), ['start'])
 
-    # (re)Start apache
-    cmd_checked(join(projects['apache'].get_install_dir(),
-                     'bin', 'apachectl'), ['start'])
+        apache1_tomcat_pid_path = join(apache_tomcat_inst_dir_1, 'pids', 'pid')
+        apache2_tomcat_pid_path = join(apache_tomcat_inst_dir_2, 'pids', 'pid')
 
-    apache1_tomcat_pid_path = join(apache_tomcat_inst_dir_1, 'pids', 'pid')
-    apache2_tomcat_pid_path = join(apache_tomcat_inst_dir_2, 'pids', 'pid')
+        if not exists(dirname(apache1_tomcat_pid_path)):
+            makedirs(dirname(apache1_tomcat_pid_path))
+        if not exists(dirname(apache2_tomcat_pid_path)):
+            makedirs(dirname(apache2_tomcat_pid_path))
 
-    if not exists(dirname(apache1_tomcat_pid_path)):
-        makedirs(dirname(apache1_tomcat_pid_path))
-    if not exists(dirname(apache2_tomcat_pid_path)):
-        makedirs(dirname(apache2_tomcat_pid_path))
+        touch(apache1_tomcat_pid_path)
+        touch(apache2_tomcat_pid_path)
 
-    touch(apache1_tomcat_pid_path)
-    touch(apache2_tomcat_pid_path)
+        # Start tomcat
+        cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'),
+                    ['start'],
+                    env={**dict(environ), 'CATALINA_PID': apache1_tomcat_pid_path})
+        cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
+                    ['start'],
+                    env={**dict(environ), 'CATALINA_PID': apache2_tomcat_pid_path})
 
-    # Start tomcat
-    cmd_checked(join(apache_tomcat_inst_dir_1, 'bin', 'catalina.sh'),
-                ['start'],
-                env={**dict(environ), 'CATALINA_PID': apache1_tomcat_pid_path})
-    cmd_checked(join(apache_tomcat_inst_dir_2, 'bin', 'catalina.sh'),
-                ['start'],
-                env={**dict(environ), 'CATALINA_PID': apache2_tomcat_pid_path})
+        def get_jvm_route(fdesc):
+            data = fdesc.read().decode('utf-8')
+            for line in data.split('\n'):
+                idx = line.find(':')
+                if idx != -1 and line[:idx].strip() == 'JVM route':
+                    return line[idx+1:].strip()
+            return None
 
-    def get_jvm_route(fdesc):
-        data = fdesc.read().decode('utf-8')
-        for line in data.split('\n'):
-            idx = line.find(':')
-            if idx != -1 and line[:idx].strip() == 'JVM route':
-                return line[idx+1:].strip()
-        return None
+        clusterbench_url = 'http://{0}:6666/clusterbench/requestinfo'\
+                           .format(ip_address)
+        # Use session cookie
+        opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        install_opener(opener)
 
-    clusterbench_url = 'http://{0}:6666/clusterbench/requestinfo'\
-                       .format(ip_address)
-    # Use session cookie
-    opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    install_opener(opener)
+        req = Request(url=clusterbench_url)
 
-    req = Request(url=clusterbench_url)
+        timeout = 120
+        # Be sure that server is up
+        for seconds in range(timeout):
+            try:
+                fdesc = urlopen(req)
+                if fdesc.getcode() == 200:
+                    jvm_route = get_jvm_route(fdesc)
+                    fdesc.close()
+                    break
+            except HTTPError as excpt:
+                sleep(1)
+                print('Waiting for server...{0} - {1}'.format(timeout-seconds, excpt.code))
+        else:
+            assert False, "Server is not up."
 
-    timeout = 120
-    # Be sure that server is up
-    for seconds in range(timeout):
-        try:
-            fdesc = urlopen(req)
-            if fdesc.getcode() == 200:
-                jvm_route = get_jvm_route(fdesc)
-                fdesc.close()
-                break
-        except HTTPError as excpt:
-            sleep(1)
-            print('Waiting for server...{0} - {1}'.format(timeout-seconds, excpt.code))
-    else:
-        assert False, "Server is not up."
+        for _ in range(5):
+            with urlopen(req) as fdesc:
+                assert fdesc.getcode() == 200
+                # session cookies do work
+                assert get_jvm_route(fdesc) == jvm_route
 
-    for _ in range(5):
+        # kill tomcat
+        if jvm_route == 'tomcat1':
+            fname = apache1_tomcat_pid_path
+            exp_jvm_route = 'tomcat2'
+        else:
+            fname = apache2_tomcat_pid_path
+            exp_jvm_route = 'tomcat1'
+
+        with open(fname, 'r') as fdesc:
+            pid = int(fdesc.read())
+            kill(pid, SIGKILL)
+
+        # check that new tomcat is used
         with urlopen(req) as fdesc:
             assert fdesc.getcode() == 200
-            # session cookies do work
-            assert get_jvm_route(fdesc) == jvm_route
+            assert get_jvm_route(fdesc) == exp_jvm_route
 
-    # kill tomcat
-    if jvm_route == 'tomcat1':
-        fname = apache1_tomcat_pid_path
-        exp_jvm_route = 'tomcat2'
-    else:
-        fname = apache2_tomcat_pid_path
-        exp_jvm_route = 'tomcat1'
-
-    with open(fname, 'r') as fdesc:
-        pid = int(fdesc.read())
-        kill(pid, SIGKILL)
-
-    # check that new tomcat is used
-    with urlopen(req) as fdesc:
-        assert fdesc.getcode() == 200
-        assert get_jvm_route(fdesc) == exp_jvm_route
-
-    print('All green!')
-    rmtree(Project.pre_inst_dir)
+        print('All green!')
+    except Exception as exp:
+        if input("Unexpected error - {2}; Do you want to keep: {0} and {1}, type y/n".format(tmp_dir, Project.pre_inst_dir, exp)) == 'y':
+            cleanup = False
+    finally:
+        if cleanup:
+            rmtree(tmp_dir)
+            rmtree(Project.pre_inst_dir)
 
 
 if __name__ == '__main__':
